@@ -88,3 +88,24 @@ type UserSearchResult struct {
 	Email       string    `json:"email"`
 	CreatedAt   string    `json:"created_at"`
 }
+
+type BuddyRequest struct {
+	ID          int       `json:"id"`
+	RequesterID int       `json:"requester_id"`
+	RecipientID int       `json:"recipient_id"`
+	Status      string    `json:"status"` // pending, accepted, rejected
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type BuddyRequestWithUser struct {
+	ID          int       `json:"id"`
+	RequesterID int       `json:"requester_id,omitempty"`
+	RecipientID int       `json:"recipient_id,omitempty"`
+	UserID      int       `json:"user_id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"display_name"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}

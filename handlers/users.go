@@ -12,7 +12,6 @@ import (
 	"github.com/gorilla/mux"
 	"golang.org/x/crypto/bcrypt"
 	"masterboxer.com/project-micro-journal/models"
-	"masterboxer.com/project-micro-journal/services"
 )
 
 func GetUsers(db *sql.DB) http.HandlerFunc {
@@ -264,53 +263,6 @@ func GetUserBuddies(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func AddBuddy(db *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		userID, _ := strconv.Atoi(vars["user_id"])
-
-		var req struct {
-			BuddyID int `json:"buddy_id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return
-		}
-
-		if req.BuddyID == userID {
-			http.Error(w, "Cannot add self as buddy", http.StatusBadRequest)
-			return
-		}
-
-		var exists bool
-		err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)", req.BuddyID).Scan(&exists)
-		if err != nil {
-			http.Error(w, "Database error", http.StatusInternalServerError)
-			log.Println("Error checking buddy existence:", err)
-			return
-		}
-
-		if !exists {
-			http.Error(w, "Buddy user not found", http.StatusNotFound)
-			return
-		}
-
-		_, err = db.Exec(`
-            INSERT INTO buddies (user_id, buddy_id) 
-            VALUES ($1, $2) 
-            ON CONFLICT (user_id, buddy_id) DO NOTHING`,
-			userID, req.BuddyID)
-		if err != nil {
-			http.Error(w, "Failed to add buddy", http.StatusInternalServerError)
-			log.Println(err)
-			return
-		}
-
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]string{"message": "Buddy added successfully"})
-	}
-}
-
 func RemoveBuddy(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -425,97 +377,6 @@ func RegisterFCMToken(db *sql.DB) http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]string{
 			"message": "FCM token registered successfully",
 		})
-	}
-}
-
-func AddBuddyWithNotification(db *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		userID, _ := strconv.Atoi(vars["user_id"])
-
-		var req struct {
-			BuddyID int `json:"buddy_id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
-			return
-		}
-
-		if req.BuddyID == userID {
-			http.Error(w, "Cannot add self as buddy", http.StatusBadRequest)
-			return
-		}
-
-		var displayName string
-		err := db.QueryRow("SELECT display_name FROM users WHERE id = $1", userID).Scan(&displayName)
-		if err != nil {
-			http.Error(w, "User not found", http.StatusNotFound)
-			log.Println("Error getting username:", err)
-			return
-		}
-
-		var buddyExists bool
-		err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)", req.BuddyID).Scan(&buddyExists)
-		if err != nil || !buddyExists {
-			http.Error(w, "Buddy user not found", http.StatusNotFound)
-			return
-		}
-
-		_, err = db.Exec(`
-            INSERT INTO buddies (user_id, buddy_id) 
-            VALUES ($1, $2) 
-            ON CONFLICT (user_id, buddy_id) DO NOTHING`,
-			userID, req.BuddyID)
-		if err != nil {
-			http.Error(w, "Failed to add buddy", http.StatusInternalServerError)
-			log.Println(err)
-			return
-		}
-
-		go func() {
-			rows, err := db.Query(`
-				SELECT token FROM fcm_tokens 
-				WHERE user_id = $1 AND token IS NOT NULL AND token != ''`,
-				req.BuddyID)
-			if err != nil {
-				log.Printf("Error fetching buddy FCM tokens: %v", err)
-				return
-			}
-			defer rows.Close()
-
-			var tokens []string
-			for rows.Next() {
-				var token string
-				if err := rows.Scan(&token); err != nil {
-					log.Printf("Error scanning token: %v", err)
-					continue
-				}
-				tokens = append(tokens, token)
-			}
-
-			if len(tokens) == 0 {
-				log.Printf("No FCM tokens found for buddy %d", req.BuddyID)
-				return
-			}
-
-			data := map[string]string{
-				"type":    "buddy_added",
-				"user_id": strconv.Itoa(userID),
-			}
-
-			_, _, err = services.SendMultipleNotifications(
-				tokens,
-				"New Buddy Request",
-				displayName+" added you as a buddy!",
-				data,
-			)
-			if err != nil {
-				log.Printf("Failed to send buddy notification: %v", err)
-			}
-		}()
-
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]string{"message": "Buddy added successfully"})
 	}
 }
 
