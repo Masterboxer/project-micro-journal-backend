@@ -73,6 +73,99 @@ func GetPostsByUser(db *sql.DB) http.HandlerFunc {
 	}
 }
 
+func GetUserFeed(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		userIDStr, ok := vars["userId"]
+		if !ok || userIDStr == "" {
+			http.Error(w, "userId parameter missing", http.StatusBadRequest)
+			return
+		}
+
+		userID, err := strconv.Atoi(userIDStr)
+		if err != nil {
+			http.Error(w, "Invalid userId", http.StatusBadRequest)
+			return
+		}
+
+		log.Printf("GetUserFeed called for user ID: %d", userID)
+
+		thirtySixHoursAgo := time.Now().Add(-36 * time.Hour)
+
+		rows, err := db.Query(`
+            SELECT p.id, p.user_id, p.template_id, p.text, 
+                   COALESCE(p.photo_path, '') as photo_path, 
+                   p.created_at, 
+                   u.username, u.display_name,
+                   COALESCE((SELECT COUNT(*) FROM likes WHERE post_id = p.id), 0) as like_count,
+                   COALESCE((SELECT COUNT(*) FROM comments WHERE post_id = p.id), 0) as comment_count,
+                   EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = $1) as is_liked_by_user
+            FROM posts p
+            JOIN users u ON p.user_id = u.id
+            WHERE (p.user_id = $1 
+               OR p.user_id IN (
+                   SELECT buddy_id FROM buddies WHERE user_id = $1
+                   UNION
+                   SELECT user_id FROM buddies WHERE buddy_id = $1
+               ))
+            AND p.created_at >= $2
+            ORDER BY p.created_at DESC`,
+			userID, thirtySixHoursAgo)
+
+		if err != nil {
+			http.Error(w, "Failed to fetch feed", http.StatusInternalServerError)
+			log.Printf("GetUserFeed query error: %v", err)
+			return
+		}
+		defer rows.Close()
+
+		var feed []map[string]interface{}
+		for rows.Next() {
+			var post struct {
+				ID           int
+				UserID       int
+				TemplateID   int
+				Text         string
+				PhotoPath    string
+				CreatedAt    time.Time
+				Username     string
+				DisplayName  string
+				LikeCount    int
+				CommentCount int
+				IsLiked      bool
+			}
+
+			if err := rows.Scan(&post.ID, &post.UserID, &post.TemplateID,
+				&post.Text, &post.PhotoPath, &post.CreatedAt,
+				&post.Username, &post.DisplayName, &post.LikeCount,
+				&post.CommentCount, &post.IsLiked); err != nil {
+				http.Error(w, "Error scanning posts", http.StatusInternalServerError)
+				log.Printf("GetUserFeed scan error: %v", err)
+				return
+			}
+
+			feed = append(feed, map[string]interface{}{
+				"id":               post.ID,
+				"user_id":          post.UserID,
+				"template_id":      post.TemplateID,
+				"text":             post.Text,
+				"photo_path":       post.PhotoPath,
+				"created_at":       post.CreatedAt.Format(time.RFC3339),
+				"username":         post.Username,
+				"display_name":     post.DisplayName,
+				"like_count":       post.LikeCount,
+				"comment_count":    post.CommentCount,
+				"is_liked_by_user": post.IsLiked,
+			})
+		}
+
+		log.Printf("GetUserFeed returning %d posts for user %d (from last 36 hours)", len(feed), userID)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(feed)
+	}
+}
+
 func CreatePost(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var p models.Post
@@ -304,92 +397,6 @@ func GetTodayPostForUser(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func GetBuddyPosts(db *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		userIDStr, ok := vars["userId"]
-		if !ok || userIDStr == "" {
-			http.Error(w, "userId parameter missing", http.StatusBadRequest)
-			return
-		}
-
-		userID, err := strconv.Atoi(userIDStr)
-		if err != nil {
-			http.Error(w, "Invalid userId", http.StatusBadRequest)
-			return
-		}
-
-		thirtysixHoursAgo := time.Now().Add(-36 * time.Hour)
-
-		rows, err := db.Query(`
-            SELECT p.id, p.user_id, p.template_id, p.text, 
-                   COALESCE(p.photo_path, '') as photo_path, 
-                   p.created_at, 
-                   u.username, u.display_name,
-                   (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
-                   (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
-                   EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = $1) as is_liked
-            FROM posts p
-            JOIN users u ON p.user_id = u.id
-            WHERE (p.user_id = $1 OR p.user_id IN (
-                SELECT buddy_id FROM buddies WHERE user_id = $1
-            ))
-            AND p.created_at >= $2
-            ORDER BY p.created_at DESC`,
-			userID, thirtysixHoursAgo)
-
-		if err != nil {
-			http.Error(w, "Failed to fetch posts", http.StatusInternalServerError)
-			log.Println("GetBuddyPosts error:", err)
-			return
-		}
-		defer rows.Close()
-
-		var feed []map[string]interface{}
-		for rows.Next() {
-			var post struct {
-				ID           int
-				UserID       int
-				TemplateID   int
-				Text         string
-				PhotoPath    string
-				CreatedAt    string
-				Username     string
-				DisplayName  string
-				LikeCount    int
-				CommentCount int
-				IsLiked      bool
-			}
-
-			if err := rows.Scan(&post.ID, &post.UserID, &post.TemplateID,
-				&post.Text, &post.PhotoPath, &post.CreatedAt,
-				&post.Username, &post.DisplayName, &post.LikeCount,
-				&post.CommentCount, &post.IsLiked); err != nil {
-				http.Error(w, "Error scanning posts", http.StatusInternalServerError)
-				log.Println("GetBuddyPosts scan error:", err)
-				return
-			}
-
-			feed = append(feed, map[string]interface{}{
-				"id":               post.ID,
-				"user_id":          post.UserID,
-				"template_id":      post.TemplateID,
-				"text":             post.Text,
-				"photo_path":       post.PhotoPath,
-				"created_at":       post.CreatedAt,
-				"username":         post.Username,
-				"display_name":     post.DisplayName,
-				"like_count":       post.LikeCount,
-				"comment_count":    post.CommentCount,
-				"is_liked_by_user": post.IsLiked,
-			})
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(feed)
-	}
-}
-
 func ToggleLike(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -410,14 +417,12 @@ func ToggleLike(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Check if already liked
 		var existingLikeID int
 		err = db.QueryRow(`
             SELECT id FROM likes WHERE user_id = $1 AND post_id = $2`,
 			req.UserID, postID).Scan(&existingLikeID)
 
 		if err == sql.ErrNoRows {
-			// Create new like
 			var likeID int
 			err = db.QueryRow(`
                 INSERT INTO likes (user_id, post_id)
@@ -431,6 +436,8 @@ func ToggleLike(db *sql.DB) http.HandlerFunc {
 				return
 			}
 
+			go notifyPostOwnerOfLike(db, postID, req.UserID)
+
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"liked":   true,
@@ -441,7 +448,6 @@ func ToggleLike(db *sql.DB) http.HandlerFunc {
 			log.Println("ToggleLike query error:", err)
 			return
 		} else {
-			// Unlike - delete existing like
 			_, err = db.Exec(`DELETE FROM likes WHERE id = $1`, existingLikeID)
 			if err != nil {
 				http.Error(w, "Failed to remove like", http.StatusInternalServerError)
@@ -457,7 +463,6 @@ func ToggleLike(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// GetPostLikes returns all likes for a post
 func GetPostLikes(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -511,7 +516,6 @@ func GetPostLikes(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// CreateComment creates a new comment on a post
 func CreateComment(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -553,13 +557,15 @@ func CreateComment(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// Send notification to post owner
+		go notifyPostOwnerOfComment(db, postIDInt, comment.UserID, comment.Text)
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(comment)
 	}
 }
 
-// GetPostComments returns all comments for a post
 func GetPostComments(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -598,7 +604,6 @@ func GetPostComments(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// DeleteComment deletes a comment
 func DeleteComment(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -613,7 +618,6 @@ func DeleteComment(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Verify ownership
 		var ownerID int
 		err := db.QueryRow(`SELECT user_id FROM comments WHERE id = $1`,
 			commentID).Scan(&ownerID)
@@ -643,4 +647,167 @@ func DeleteComment(db *sql.DB) http.HandlerFunc {
 			"message": "Comment deleted successfully",
 		})
 	}
+}
+
+func notifyPostOwnerOfLike(db *sql.DB, postID int, likerUserID int) {
+	var postOwnerID int
+	var postText string
+	var likerDisplayName string
+
+	err := db.QueryRow(`
+		SELECT user_id, text 
+		FROM posts 
+		WHERE id = $1`, postID).Scan(&postOwnerID, &postText)
+
+	if err != nil {
+		log.Printf("Error fetching post info for like notification: %v", err)
+		return
+	}
+
+	if postOwnerID == likerUserID {
+		return
+	}
+
+	err = db.QueryRow(`
+		SELECT display_name 
+		FROM users 
+		WHERE id = $1`, likerUserID).Scan(&likerDisplayName)
+
+	if err != nil {
+		log.Printf("Error fetching liker display name: %v", err)
+		likerDisplayName = "Someone"
+	}
+
+	rows, err := db.Query(`
+		SELECT token 
+		FROM fcm_tokens 
+		WHERE user_id = $1 
+		  AND token IS NOT NULL 
+		  AND token != ''`,
+		postOwnerID)
+
+	if err != nil {
+		log.Printf("Error fetching post owner FCM tokens: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	var tokens []string
+	for rows.Next() {
+		var token string
+		if err := rows.Scan(&token); err != nil {
+			log.Printf("Error scanning FCM token: %v", err)
+			continue
+		}
+		tokens = append(tokens, token)
+	}
+
+	if len(tokens) == 0 {
+		log.Printf("No FCM tokens found for post owner %d", postOwnerID)
+		return
+	}
+
+	title := fmt.Sprintf("%s liked your post", likerDisplayName)
+	body := postText
+	if len(body) > 100 {
+		body = body[:97] + "..."
+	}
+
+	data := map[string]string{
+		"type":          "post_like",
+		"post_id":       strconv.Itoa(postID),
+		"liker_id":      strconv.Itoa(likerUserID),
+		"post_owner_id": strconv.Itoa(postOwnerID),
+	}
+
+	successCount, failureCount, err := services.SendMultipleNotifications(tokens, title, body, data)
+	if err != nil {
+		log.Printf("Error sending like notification: %v", err)
+		return
+	}
+
+	log.Printf("Sent like notification for post %d: %d successful, %d failed",
+		postID, successCount, failureCount)
+}
+
+func notifyPostOwnerOfComment(db *sql.DB, postID int, commenterUserID int, commentText string) {
+	var postOwnerID int
+	var postText string
+	var commenterDisplayName string
+
+	err := db.QueryRow(`
+		SELECT user_id, text 
+		FROM posts 
+		WHERE id = $1`, postID).Scan(&postOwnerID, &postText)
+
+	if err != nil {
+		log.Printf("Error fetching post info for comment notification: %v", err)
+		return
+	}
+
+	if postOwnerID == commenterUserID {
+		return
+	}
+
+	err = db.QueryRow(`
+		SELECT display_name 
+		FROM users 
+		WHERE id = $1`, commenterUserID).Scan(&commenterDisplayName)
+
+	if err != nil {
+		log.Printf("Error fetching commenter display name: %v", err)
+		commenterDisplayName = "Someone"
+	}
+
+	rows, err := db.Query(`
+		SELECT token 
+		FROM fcm_tokens 
+		WHERE user_id = $1 
+		  AND token IS NOT NULL 
+		  AND token != ''`,
+		postOwnerID)
+
+	if err != nil {
+		log.Printf("Error fetching post owner FCM tokens: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	var tokens []string
+	for rows.Next() {
+		var token string
+		if err := rows.Scan(&token); err != nil {
+			log.Printf("Error scanning FCM token: %v", err)
+			continue
+		}
+		tokens = append(tokens, token)
+	}
+
+	if len(tokens) == 0 {
+		log.Printf("No FCM tokens found for post owner %d", postOwnerID)
+		return
+	}
+
+	title := fmt.Sprintf("%s commented on your post", commenterDisplayName)
+	body := commentText
+	if len(body) > 100 {
+		body = body[:97] + "..."
+	}
+
+	data := map[string]string{
+		"type":          "post_comment",
+		"post_id":       strconv.Itoa(postID),
+		"commenter_id":  strconv.Itoa(commenterUserID),
+		"post_owner_id": strconv.Itoa(postOwnerID),
+		"comment_text":  commentText,
+	}
+
+	successCount, failureCount, err := services.SendMultipleNotifications(tokens, title, body, data)
+	if err != nil {
+		log.Printf("Error sending comment notification: %v", err)
+		return
+	}
+
+	log.Printf("Sent comment notification for post %d: %d successful, %d failed",
+		postID, successCount, failureCount)
 }
