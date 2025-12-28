@@ -325,101 +325,322 @@ func GetBuddyPosts(db *sql.DB) http.HandlerFunc {
             SELECT p.id, p.user_id, p.template_id, p.text, 
                    COALESCE(p.photo_path, '') as photo_path, 
                    p.created_at, 
-                   u.username, u.display_name
+                   u.username, u.display_name,
+                   (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
+                   (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
+                   EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = $1) as is_liked
             FROM posts p
             JOIN users u ON p.user_id = u.id
-            WHERE p.user_id = $1
-              AND p.created_at >= $2
+            WHERE (p.user_id = $1 OR p.user_id IN (
+                SELECT buddy_id FROM buddies WHERE user_id = $1
+            ))
+            AND p.created_at >= $2
             ORDER BY p.created_at DESC`,
 			userID, thirtysixHoursAgo)
+
 		if err != nil {
-			http.Error(w, "Failed to fetch user posts", http.StatusInternalServerError)
-			log.Println("GetBuddyPosts user posts error:", err)
+			http.Error(w, "Failed to fetch posts", http.StatusInternalServerError)
+			log.Println("GetBuddyPosts error:", err)
 			return
 		}
 		defer rows.Close()
 
-		var userPosts []models.PostWithUser
+		var feed []map[string]interface{}
 		for rows.Next() {
-			var p models.PostWithUser
-			if err := rows.Scan(
-				&p.ID,
-				&p.UserID,
-				&p.TemplateID,
-				&p.Text,
-				&p.PhotoPath,
-				&p.CreatedAt,
-				&p.Username,
-				&p.DisplayName,
-			); err != nil {
-				http.Error(w, "Error scanning user posts", http.StatusInternalServerError)
-				log.Println("GetBuddyPosts user scan error:", err)
+			var post struct {
+				ID           int
+				UserID       int
+				TemplateID   int
+				Text         string
+				PhotoPath    string
+				CreatedAt    string
+				Username     string
+				DisplayName  string
+				LikeCount    int
+				CommentCount int
+				IsLiked      bool
+			}
+
+			if err := rows.Scan(&post.ID, &post.UserID, &post.TemplateID,
+				&post.Text, &post.PhotoPath, &post.CreatedAt,
+				&post.Username, &post.DisplayName, &post.LikeCount,
+				&post.CommentCount, &post.IsLiked); err != nil {
+				http.Error(w, "Error scanning posts", http.StatusInternalServerError)
+				log.Println("GetBuddyPosts scan error:", err)
 				return
 			}
-			userPosts = append(userPosts, p)
-		}
-		if err := rows.Err(); err != nil {
-			http.Error(w, "Error iterating user posts", http.StatusInternalServerError)
-			log.Println("GetBuddyPosts user rows error:", err)
-			return
-		}
 
-		rows, err = db.Query(`
-            SELECT
-                p.id,
-                p.user_id,
-                p.template_id,
-                p.text,
-                COALESCE(p.photo_path, '') as photo_path,
-                p.created_at,
-                u.username,
-                u.display_name
-            FROM posts p
-            JOIN buddies b ON p.user_id = b.buddy_id
-            JOIN users u ON p.user_id = u.id
-            WHERE b.user_id = $1
-              AND p.user_id != $2
-              AND p.created_at >= $3
-            ORDER BY p.created_at DESC
-            LIMIT 49`,
-			userID, userID, thirtysixHoursAgo)
-		if err != nil {
-			http.Error(w, "Database query failed", http.StatusInternalServerError)
-			log.Println("GetBuddyPosts buddy posts error:", err)
-			return
+			feed = append(feed, map[string]interface{}{
+				"id":               post.ID,
+				"user_id":          post.UserID,
+				"template_id":      post.TemplateID,
+				"text":             post.Text,
+				"photo_path":       post.PhotoPath,
+				"created_at":       post.CreatedAt,
+				"username":         post.Username,
+				"display_name":     post.DisplayName,
+				"like_count":       post.LikeCount,
+				"comment_count":    post.CommentCount,
+				"is_liked_by_user": post.IsLiked,
+			})
 		}
-		defer rows.Close()
-
-		var buddyPosts []models.PostWithUser
-		for rows.Next() {
-			var p models.PostWithUser
-			if err := rows.Scan(
-				&p.ID,
-				&p.UserID,
-				&p.TemplateID,
-				&p.Text,
-				&p.PhotoPath,
-				&p.CreatedAt,
-				&p.Username,
-				&p.DisplayName,
-			); err != nil {
-				http.Error(w, "Error scanning buddy posts", http.StatusInternalServerError)
-				log.Println("GetBuddyPosts buddy scan error:", err)
-				return
-			}
-			buddyPosts = append(buddyPosts, p)
-		}
-		if err := rows.Err(); err != nil {
-			http.Error(w, "Error iterating buddy posts", http.StatusInternalServerError)
-			log.Println("GetBuddyPosts buddy rows error:", err)
-			return
-		}
-
-		var feed []models.PostWithUser
-		feed = append(feed, userPosts...)
-		feed = append(feed, buddyPosts...)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(feed)
+	}
+}
+
+func ToggleLike(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		postIDStr := vars["postId"]
+
+		var req struct {
+			UserID int `json:"user_id"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		postID, err := strconv.Atoi(postIDStr)
+		if err != nil {
+			http.Error(w, "Invalid post ID", http.StatusBadRequest)
+			return
+		}
+
+		// Check if already liked
+		var existingLikeID int
+		err = db.QueryRow(`
+            SELECT id FROM likes WHERE user_id = $1 AND post_id = $2`,
+			req.UserID, postID).Scan(&existingLikeID)
+
+		if err == sql.ErrNoRows {
+			// Create new like
+			var likeID int
+			err = db.QueryRow(`
+                INSERT INTO likes (user_id, post_id)
+                VALUES ($1, $2)
+                RETURNING id`,
+				req.UserID, postID).Scan(&likeID)
+
+			if err != nil {
+				http.Error(w, "Failed to create like", http.StatusInternalServerError)
+				log.Println("ToggleLike create error:", err)
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"liked":   true,
+				"like_id": likeID,
+			})
+		} else if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			log.Println("ToggleLike query error:", err)
+			return
+		} else {
+			// Unlike - delete existing like
+			_, err = db.Exec(`DELETE FROM likes WHERE id = $1`, existingLikeID)
+			if err != nil {
+				http.Error(w, "Failed to remove like", http.StatusInternalServerError)
+				log.Println("ToggleLike delete error:", err)
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"liked": false,
+			})
+		}
+	}
+}
+
+// GetPostLikes returns all likes for a post
+func GetPostLikes(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		postID := vars["postId"]
+
+		rows, err := db.Query(`
+            SELECT l.id, l.post_id, l.user_id, l.created_at,
+                   u.username, u.display_name
+            FROM likes l
+            JOIN users u ON l.user_id = u.id
+            WHERE l.post_id = $1
+            ORDER BY l.created_at DESC`,
+			postID)
+
+		if err != nil {
+			http.Error(w, "Failed to fetch likes", http.StatusInternalServerError)
+			log.Println("GetPostLikes error:", err)
+			return
+		}
+		defer rows.Close()
+
+		var likes []map[string]interface{}
+		for rows.Next() {
+			var like struct {
+				ID          int
+				PostID      int
+				UserID      int
+				CreatedAt   string
+				Username    string
+				DisplayName string
+			}
+
+			if err := rows.Scan(&like.ID, &like.PostID, &like.UserID,
+				&like.CreatedAt, &like.Username, &like.DisplayName); err != nil {
+				http.Error(w, "Error scanning likes", http.StatusInternalServerError)
+				return
+			}
+
+			likes = append(likes, map[string]interface{}{
+				"id":           like.ID,
+				"post_id":      like.PostID,
+				"user_id":      like.UserID,
+				"created_at":   like.CreatedAt,
+				"username":     like.Username,
+				"display_name": like.DisplayName,
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(likes)
+	}
+}
+
+// CreateComment creates a new comment on a post
+func CreateComment(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		postID := vars["postId"]
+
+		var comment models.Comment
+		if err := json.NewDecoder(r.Body).Decode(&comment); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if comment.Text == "" {
+			http.Error(w, "Comment text is required", http.StatusBadRequest)
+			return
+		}
+
+		if len(comment.Text) > 500 {
+			http.Error(w, "Comment must be at most 500 characters", http.StatusBadRequest)
+			return
+		}
+
+		postIDInt, err := strconv.Atoi(postID)
+		if err != nil {
+			http.Error(w, "Invalid post ID", http.StatusBadRequest)
+			return
+		}
+
+		err = db.QueryRow(`
+            INSERT INTO comments (post_id, user_id, text)
+            VALUES ($1, $2, $3)
+            RETURNING id, post_id, user_id, text, created_at`,
+			postIDInt, comment.UserID, comment.Text,
+		).Scan(&comment.ID, &comment.PostID, &comment.UserID,
+			&comment.Text, &comment.CreatedAt)
+
+		if err != nil {
+			http.Error(w, "Failed to create comment", http.StatusInternalServerError)
+			log.Println("CreateComment error:", err)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(comment)
+	}
+}
+
+// GetPostComments returns all comments for a post
+func GetPostComments(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		postID := vars["postId"]
+
+		rows, err := db.Query(`
+            SELECT c.id, c.post_id, c.user_id, c.text, c.created_at,
+                   u.username, u.display_name
+            FROM comments c
+            JOIN users u ON c.user_id = u.id
+            WHERE c.post_id = $1
+            ORDER BY c.created_at ASC`,
+			postID)
+
+		if err != nil {
+			http.Error(w, "Failed to fetch comments", http.StatusInternalServerError)
+			log.Println("GetPostComments error:", err)
+			return
+		}
+		defer rows.Close()
+
+		var comments []models.CommentWithUser
+		for rows.Next() {
+			var c models.CommentWithUser
+			if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Text,
+				&c.CreatedAt, &c.Username, &c.DisplayName); err != nil {
+				http.Error(w, "Error scanning comments", http.StatusInternalServerError)
+				log.Println("GetPostComments scan error:", err)
+				return
+			}
+			comments = append(comments, c)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(comments)
+	}
+}
+
+// DeleteComment deletes a comment
+func DeleteComment(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		commentID := vars["commentId"]
+
+		var req struct {
+			UserID int `json:"user_id"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		// Verify ownership
+		var ownerID int
+		err := db.QueryRow(`SELECT user_id FROM comments WHERE id = $1`,
+			commentID).Scan(&ownerID)
+
+		if err == sql.ErrNoRows {
+			http.Error(w, "Comment not found", http.StatusNotFound)
+			return
+		} else if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+
+		if ownerID != req.UserID {
+			http.Error(w, "Unauthorized", http.StatusForbidden)
+			return
+		}
+
+		_, err = db.Exec(`DELETE FROM comments WHERE id = $1`, commentID)
+		if err != nil {
+			http.Error(w, "Failed to delete comment", http.StatusInternalServerError)
+			log.Println("DeleteComment error:", err)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Comment deleted successfully",
+		})
 	}
 }
