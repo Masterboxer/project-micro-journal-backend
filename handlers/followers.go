@@ -30,7 +30,6 @@ func FollowUser(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Check if target user exists and get THEIR privacy status
 		var targetExists bool
 		var isPrivate bool
 		err := db.QueryRow(`
@@ -49,10 +48,8 @@ func FollowUser(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Log for debugging
 		log.Printf("Following user %d (private: %v)", req.FollowingID, isPrivate)
 
-		// Check if already has a follow relationship (any status)
 		var existingStatus string
 		err = db.QueryRow(`
 			SELECT status FROM followers 
@@ -60,15 +57,14 @@ func FollowUser(db *sql.DB) http.HandlerFunc {
 			followerID, req.FollowingID).Scan(&existingStatus)
 
 		if err == nil {
-			// Relationship exists
-			if existingStatus == "accepted" {
+			switch existingStatus {
+			case "accepted":
 				http.Error(w, "Already following this user", http.StatusConflict)
 				return
-			} else if existingStatus == "pending" {
+			case "pending":
 				http.Error(w, "Follow request already sent", http.StatusConflict)
 				return
-			} else if existingStatus == "rejected" {
-				// Update rejected to pending
+			case "rejected":
 				_, err = db.Exec(`
 					UPDATE followers 
 					SET status = 'pending', updated_at = NOW()
@@ -91,7 +87,6 @@ func FollowUser(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Determine initial status based on TARGET USER's privacy
 		status := "accepted"
 		if isPrivate {
 			status = "pending"
@@ -99,7 +94,6 @@ func FollowUser(db *sql.DB) http.HandlerFunc {
 
 		log.Printf("Creating follow with status: %s", status)
 
-		// Create follow relationship
 		_, err = db.Exec(`
 			INSERT INTO followers (follower_id, following_id, status, created_at, updated_at)
 			VALUES ($1, $2, $3, NOW(), NOW())`,
@@ -111,7 +105,6 @@ func FollowUser(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Send notification
 		if status == "accepted" {
 			go notifyNewFollower(db, followerID, req.FollowingID)
 		} else {
@@ -126,12 +119,11 @@ func FollowUser(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// AcceptFollowRequest - Accept a pending follow request
 func AcceptFollowRequest(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
-		userID, _ := strconv.Atoi(vars["user_id"])         // Person being followed
-		followerID, _ := strconv.Atoi(vars["follower_id"]) // Person who sent request
+		userID, _ := strconv.Atoi(vars["user_id"])
+		followerID, _ := strconv.Atoi(vars["follower_id"])
 
 		result, err := db.Exec(`
 			UPDATE followers 
@@ -159,7 +151,6 @@ func AcceptFollowRequest(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// RejectFollowRequest - Reject a pending follow request
 func RejectFollowRequest(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -190,7 +181,6 @@ func RejectFollowRequest(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// CancelFollowRequest - Cancel a sent follow request (pending status only)
 func CancelFollowRequest(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -220,7 +210,6 @@ func CancelFollowRequest(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// GetPendingFollowRequests - Get list of pending follow requests received
 func GetPendingFollowRequests(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -257,7 +246,6 @@ func GetPendingFollowRequests(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// GetSentFollowRequests - Get list of pending follow requests sent
 func GetSentFollowRequests(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -294,7 +282,6 @@ func GetSentFollowRequests(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// UnfollowUser - Unfollow a user (only works for accepted follows)
 func UnfollowUser(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -324,7 +311,6 @@ func UnfollowUser(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// RemoveFollower - Remove a follower (accepted only)
 func RemoveFollower(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -354,7 +340,6 @@ func RemoveFollower(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// UnfollowAndRemove - Disconnect both ways (accepted only)
 func UnfollowAndRemove(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -402,7 +387,6 @@ func UnfollowAndRemove(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// GetUserFollowers - Get list of accepted followers only
 func GetUserFollowers(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -439,7 +423,6 @@ func GetUserFollowers(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// GetUserFollowing - Get list of accepted following only
 func GetUserFollowing(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -476,7 +459,6 @@ func GetUserFollowing(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// GetFollowStats - Get follower and following counts (accepted only)
 func GetFollowStats(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -506,7 +488,6 @@ func GetFollowStats(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// CheckFollowStatus - Check follow status between two users
 func CheckFollowStatus(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -514,11 +495,11 @@ func CheckFollowStatus(db *sql.DB) http.HandlerFunc {
 		targetUserID, _ := strconv.Atoi(vars["target_user_id"])
 
 		var status struct {
-			IsFollowing       bool   `json:"is_following"`        // Accepted follow
-			IsFollower        bool   `json:"is_follower"`         // Accepted follower
-			FollowRequestSent bool   `json:"follow_request_sent"` // Pending request sent
-			FollowRequestFrom bool   `json:"follow_request_from"` // Pending request received
-			FollowStatus      string `json:"follow_status"`       // Current status: "none", "pending", "accepted", "rejected"
+			IsFollowing       bool   `json:"is_following"`
+			IsFollower        bool   `json:"is_follower"`
+			FollowRequestSent bool   `json:"follow_request_sent"`
+			FollowRequestFrom bool   `json:"follow_request_from"`
+			FollowStatus      string `json:"follow_status"`
 		}
 
 		var currentStatus sql.NullString
@@ -551,7 +532,6 @@ func CheckFollowStatus(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// Notification helpers
 func notifyNewFollower(db *sql.DB, followerID, followingID int) {
 	var followerName string
 	err := db.QueryRow("SELECT display_name FROM users WHERE id = $1", followerID).Scan(&followerName)

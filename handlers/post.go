@@ -104,9 +104,11 @@ func GetUserFeed(db *sql.DB) http.HandlerFunc {
             JOIN users u ON p.user_id = u.id
             WHERE (p.user_id = $1 
                OR p.user_id IN (
-                   SELECT buddy_id FROM buddies WHERE user_id = $1
+                   SELECT following_id FROM followers 
+                   WHERE follower_id = $1 AND status = 'accepted'
                    UNION
-                   SELECT user_id FROM buddies WHERE buddy_id = $1
+                   SELECT follower_id FROM followers 
+                   WHERE following_id = $1 AND status = 'accepted'
                ))
             AND p.created_at >= $2
             ORDER BY p.created_at DESC`,
@@ -236,7 +238,7 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		go notifyBuddiesOfNewPost(db, p.UserID, p.Text)
+		go notifyFollowersOfNewPost(db, p.UserID, p.Text)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -244,7 +246,7 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func notifyBuddiesOfNewPost(db *sql.DB, userID int, postText string) {
+func notifyFollowersOfNewPost(db *sql.DB, userID int, postText string) {
 	var displayName string
 	err := db.QueryRow(`SELECT display_name FROM users WHERE id = $1`, userID).Scan(&displayName)
 	if err != nil {
@@ -254,14 +256,15 @@ func notifyBuddiesOfNewPost(db *sql.DB, userID int, postText string) {
 
 	rows, err := db.Query(`
 		SELECT DISTINCT ft.token
-		FROM buddies b
-		JOIN fcm_tokens ft ON b.buddy_id = ft.user_id
-		WHERE b.user_id = $1 
+		FROM followers f
+		JOIN fcm_tokens ft ON f.follower_id = ft.user_id
+		WHERE f.following_id = $1 
+		  AND f.status = 'accepted'
 		  AND ft.token IS NOT NULL 
 		  AND ft.token != ''`,
 		userID)
 	if err != nil {
-		log.Printf("Error fetching buddy FCM tokens: %v", err)
+		log.Printf("Error fetching follower FCM tokens: %v", err)
 		return
 	}
 	defer rows.Close()
@@ -277,7 +280,7 @@ func notifyBuddiesOfNewPost(db *sql.DB, userID int, postText string) {
 	}
 
 	if len(tokens) == 0 {
-		log.Printf("No FCM tokens found for user %d's buddies", userID)
+		log.Printf("No FCM tokens found for user %d's followers", userID)
 		return
 	}
 
@@ -294,7 +297,7 @@ func notifyBuddiesOfNewPost(db *sql.DB, userID int, postText string) {
 
 	successCount, failureCount, err := services.SendMultipleNotifications(tokens, title, body, data)
 	if err != nil {
-		log.Printf("Error sending notifications to buddies: %v", err)
+		log.Printf("Error sending notifications to followers: %v", err)
 		return
 	}
 
@@ -557,7 +560,6 @@ func CreateComment(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Send notification to post owner
 		go notifyPostOwnerOfComment(db, postIDInt, comment.UserID, comment.Text)
 
 		w.Header().Set("Content-Type", "application/json")
