@@ -30,13 +30,15 @@ func GetPostsByUser(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// ⭐ UPDATED: Include journal_date in SELECT
 		rows, err := db.Query(`
 			SELECT id, user_id, template_id, text, 
 			       COALESCE(photo_path, '') as photo_path, 
-			       created_at
+			       created_at,
+			       journal_date
 			FROM posts
 			WHERE user_id = $1
-			ORDER BY created_at DESC`,
+			ORDER BY journal_date DESC, created_at DESC`,
 			userID)
 		if err != nil {
 			http.Error(w, "Database query failed", http.StatusInternalServerError)
@@ -55,6 +57,7 @@ func GetPostsByUser(db *sql.DB) http.HandlerFunc {
 				&p.Text,
 				&p.PhotoPath,
 				&p.CreatedAt,
+				&p.JournalDate,
 			); err != nil {
 				http.Error(w, "Error scanning posts", http.StatusInternalServerError)
 				log.Printf("GetPostsByUser scan error: %v", err)
@@ -89,31 +92,56 @@ func GetUserFeed(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		log.Printf("GetUserFeed called for user ID: %d", userID)
+		var timezone string
+		err = db.QueryRow(`SELECT timezone FROM users WHERE id = $1`, userID).Scan(&timezone)
+		if err != nil {
+			http.Error(w, "Failed to fetch user timezone", http.StatusInternalServerError)
+			log.Println("GetUserFeed timezone error:", err)
+			return
+		}
 
-		thirtySixHoursAgo := time.Now().Add(-36 * time.Hour)
+		nowUTC := time.Now().UTC()
+		todayJournalDate, err := ComputeJournalDate(nowUTC, timezone)
+		if err != nil {
+			http.Error(w, "Failed to compute journal date", http.StatusInternalServerError)
+			log.Println("GetUserFeed journal date error:", err)
+			return
+		}
+
+		startJournalDate := todayJournalDate.AddDate(0, 0, -1)
 
 		rows, err := db.Query(`
-            SELECT p.id, p.user_id, p.template_id, p.text, 
-                   COALESCE(p.photo_path, '') as photo_path, 
-                   p.created_at, 
-                   u.username, u.display_name,
-                   COALESCE((SELECT COUNT(*) FROM likes WHERE post_id = p.id), 0) as like_count,
-                   COALESCE((SELECT COUNT(*) FROM comments WHERE post_id = p.id), 0) as comment_count,
-                   EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = $1) as is_liked_by_user
-            FROM posts p
-            JOIN users u ON p.user_id = u.id
-            WHERE (p.user_id = $1 
-               OR p.user_id IN (
-                   SELECT following_id FROM followers 
-                   WHERE follower_id = $1 AND status = 'accepted'
-                   UNION
-                   SELECT follower_id FROM followers 
-                   WHERE following_id = $1 AND status = 'accepted'
-               ))
-            AND p.created_at >= $2
-            ORDER BY p.created_at DESC`,
-			userID, thirtySixHoursAgo)
+			SELECT 
+				p.id,
+				p.user_id,
+				p.template_id,
+				p.text,
+				COALESCE(p.photo_path, '') AS photo_path,
+				p.created_at,
+				p.journal_date,
+				u.username,
+				u.display_name,
+				COALESCE((SELECT COUNT(*) FROM likes WHERE post_id = p.id), 0) AS like_count,
+				COALESCE((SELECT COUNT(*) FROM comments WHERE post_id = p.id), 0) AS comment_count,
+				EXISTS(
+					SELECT 1 FROM likes 
+					WHERE post_id = p.id AND user_id = $1
+				) AS is_liked_by_user
+			FROM posts p
+			JOIN users u ON p.user_id = u.id
+			WHERE (
+				p.user_id = $1
+				OR p.user_id IN (
+					SELECT following_id FROM followers 
+					WHERE follower_id = $1 AND status = 'accepted'
+					UNION
+					SELECT follower_id FROM followers 
+					WHERE following_id = $1 AND status = 'accepted'
+				)
+			)
+			AND p.journal_date >= $2
+			ORDER BY p.journal_date DESC, p.created_at DESC
+		`, userID, startJournalDate)
 
 		if err != nil {
 			http.Error(w, "Failed to fetch feed", http.StatusInternalServerError)
@@ -131,6 +159,7 @@ func GetUserFeed(db *sql.DB) http.HandlerFunc {
 				Text         string
 				PhotoPath    string
 				CreatedAt    time.Time
+				JournalDate  time.Time
 				Username     string
 				DisplayName  string
 				LikeCount    int
@@ -138,12 +167,22 @@ func GetUserFeed(db *sql.DB) http.HandlerFunc {
 				IsLiked      bool
 			}
 
-			if err := rows.Scan(&post.ID, &post.UserID, &post.TemplateID,
-				&post.Text, &post.PhotoPath, &post.CreatedAt,
-				&post.Username, &post.DisplayName, &post.LikeCount,
-				&post.CommentCount, &post.IsLiked); err != nil {
-				http.Error(w, "Error scanning posts", http.StatusInternalServerError)
-				log.Printf("GetUserFeed scan error: %v", err)
+			if err := rows.Scan(
+				&post.ID,
+				&post.UserID,
+				&post.TemplateID,
+				&post.Text,
+				&post.PhotoPath,
+				&post.CreatedAt,
+				&post.JournalDate,
+				&post.Username,
+				&post.DisplayName,
+				&post.LikeCount,
+				&post.CommentCount,
+				&post.IsLiked,
+			); err != nil {
+				http.Error(w, "Error scanning feed", http.StatusInternalServerError)
+				log.Println("GetUserFeed scan error:", err)
 				return
 			}
 
@@ -154,6 +193,7 @@ func GetUserFeed(db *sql.DB) http.HandlerFunc {
 				"text":             post.Text,
 				"photo_path":       post.PhotoPath,
 				"created_at":       post.CreatedAt.Format(time.RFC3339),
+				"journal_date":     post.JournalDate.Format("2006-01-02"),
 				"username":         post.Username,
 				"display_name":     post.DisplayName,
 				"like_count":       post.LikeCount,
@@ -161,8 +201,6 @@ func GetUserFeed(db *sql.DB) http.HandlerFunc {
 				"is_liked_by_user": post.IsLiked,
 			})
 		}
-
-		log.Printf("GetUserFeed returning %d posts for user %d (from last 36 hours)", len(feed), userID)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(feed)
@@ -389,20 +427,30 @@ func GetTodayPostForUser(db *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		now := time.Now()
-		startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		endOfDay := startOfDay.Add(24 * time.Hour)
+		var timezone string
+		err = db.QueryRow(`SELECT timezone FROM users WHERE id = $1`, userID).Scan(&timezone)
+		if err != nil {
+			http.Error(w, "Failed to fetch user timezone", http.StatusInternalServerError)
+			log.Printf("GetTodayPostForUser timezone error: %v", err)
+			return
+		}
+
+		todayJournalDate, err := ComputeJournalDate(time.Now().UTC(), timezone)
+		if err != nil {
+			http.Error(w, "Failed to compute journal date", http.StatusInternalServerError)
+			log.Printf("GetTodayPostForUser journal date error: %v", err)
+			return
+		}
 
 		var p models.Post
 		err = db.QueryRow(`
-			SELECT id, user_id, template_id, text, photo_path, created_at
+			SELECT id, user_id, template_id, text, photo_path, created_at, journal_date
 			FROM posts
 			WHERE user_id = $1
-			  AND created_at >= $2
-			  AND created_at < $3
+			  AND journal_date = $2
 			ORDER BY created_at DESC
 			LIMIT 1`,
-			userID, startOfDay, endOfDay,
+			userID, todayJournalDate,
 		).Scan(
 			&p.ID,
 			&p.UserID,
@@ -410,6 +458,7 @@ func GetTodayPostForUser(db *sql.DB) http.HandlerFunc {
 			&p.Text,
 			&p.PhotoPath,
 			&p.CreatedAt,
+			&p.JournalDate,
 		)
 
 		if err != nil {
@@ -417,7 +466,7 @@ func GetTodayPostForUser(db *sql.DB) http.HandlerFunc {
 				w.WriteHeader(http.StatusNoContent)
 			} else {
 				http.Error(w, "Database query failed", http.StatusInternalServerError)
-				log.Println(err)
+				log.Printf("GetTodayPostForUser query error: %v", err)
 			}
 			return
 		}

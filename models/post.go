@@ -3,12 +3,13 @@ package models
 import "time"
 
 type Post struct {
-	ID         int       `json:"id"`
-	UserID     int       `json:"user_id"`
-	TemplateID int       `json:"template_id"`
-	Text       string    `json:"text"`
-	PhotoPath  *string   `json:"photoPath,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID          int       `json:"id"`
+	UserID      int       `json:"user_id"`
+	TemplateID  int       `json:"template_id"`
+	Text        string    `json:"text"`
+	PhotoPath   string    `json:"photo_path,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	JournalDate time.Time `json:"journal_date"`
 }
 
 type PostWithUser struct {
