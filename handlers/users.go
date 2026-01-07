@@ -17,7 +17,7 @@ import (
 func GetUsers(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query(`SELECT id, username, display_name, dob, 
-            gender, email, password, created_at FROM users`)
+            gender, email, password, is_private, created_at FROM users`)
 		if err != nil {
 			http.Error(w, "Database query failed", http.StatusInternalServerError)
 			log.Println(err)
@@ -29,7 +29,7 @@ func GetUsers(db *sql.DB) http.HandlerFunc {
 		for rows.Next() {
 			var u models.User
 			if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.DOB,
-				&u.Gender, &u.Email, &u.Password, &u.CreatedAt); err != nil {
+				&u.Gender, &u.Email, &u.Password, &u.IsPrivate, &u.CreatedAt); err != nil {
 				http.Error(w, "Error scanning user data", http.StatusInternalServerError)
 				log.Println(err)
 				return
@@ -60,9 +60,9 @@ func GetUserById(db *sql.DB) http.HandlerFunc {
 
 		var u models.User
 		err := db.QueryRow(`SELECT id, username, display_name, dob, 
-            gender, email, password, created_at FROM users WHERE id = $1`, id).
+            gender, email, password, is_private, created_at FROM users WHERE id = $1`, id).
 			Scan(&u.ID, &u.Username, &u.DisplayName, &u.DOB, &u.Gender, &u.Email,
-				&u.Password, &u.CreatedAt)
+				&u.Password, &u.IsPrivate, &u.CreatedAt)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				http.Error(w, "User not found", http.StatusNotFound)
@@ -77,35 +77,71 @@ func GetUserById(db *sql.DB) http.HandlerFunc {
 
 		type UserWithStats struct {
 			models.User
-			FollowersCount int   `json:"followers_count"`
-			FollowingCount int   `json:"following_count"`
-			IsFollowing    *bool `json:"is_following,omitempty"`
-			IsFollower     *bool `json:"is_follower,omitempty"`
+			FollowersCount       int    `json:"followers_count"`
+			FollowingCount       int    `json:"following_count"`
+			PendingRequestsCount int    `json:"pending_requests_count,omitempty"`
+			IsFollowing          *bool  `json:"is_following,omitempty"`
+			IsFollower           *bool  `json:"is_follower,omitempty"`
+			FollowRequestSent    *bool  `json:"follow_request_sent,omitempty"`
+			FollowRequestFrom    *bool  `json:"follow_request_from,omitempty"`
+			FollowStatus         string `json:"follow_status,omitempty"`
 		}
 
 		userWithStats := UserWithStats{User: u}
 
+		// Get follower/following counts (accepted only)
 		err = db.QueryRow(`
 			SELECT 
-				(SELECT COUNT(*) FROM followers WHERE following_id = $1) as followers,
-				(SELECT COUNT(*) FROM followers WHERE follower_id = $1) as following`,
+				(SELECT COUNT(*) FROM followers WHERE following_id = $1 AND status = 'accepted') as followers,
+				(SELECT COUNT(*) FROM followers WHERE follower_id = $1 AND status = 'accepted') as following`,
 			id).Scan(&userWithStats.FollowersCount, &userWithStats.FollowingCount)
 
 		if err != nil {
 			log.Println("Error fetching follow stats:", err)
 		}
 
-		if requestingUserID > 0 && requestingUserID != u.ID {
-			var isFollowing, isFollower bool
+		// If requesting user is viewing their own profile, include pending requests count
+		if requestingUserID > 0 && requestingUserID == u.ID {
+			var pendingCount int
 			err = db.QueryRow(`
-				SELECT 
-					EXISTS(SELECT 1 FROM followers WHERE follower_id = $1 AND following_id = $2) as following,
-					EXISTS(SELECT 1 FROM followers WHERE follower_id = $2 AND following_id = $1) as follower`,
-				requestingUserID, id).Scan(&isFollowing, &isFollower)
-
+				SELECT COUNT(*) FROM followers 
+				WHERE following_id = $1 AND status = 'pending'`,
+				id).Scan(&pendingCount)
 			if err == nil {
+				userWithStats.PendingRequestsCount = pendingCount
+			}
+		}
+
+		// Get follow status if viewing another user's profile
+		if requestingUserID > 0 && requestingUserID != u.ID {
+			var currentStatus sql.NullString
+			err = db.QueryRow(`
+				SELECT status FROM followers 
+				WHERE follower_id = $1 AND following_id = $2`,
+				requestingUserID, id).Scan(&currentStatus)
+
+			if err == nil && currentStatus.Valid {
+				userWithStats.FollowStatus = currentStatus.String
+				isFollowing := (currentStatus.String == "accepted")
+				requestSent := (currentStatus.String == "pending")
 				userWithStats.IsFollowing = &isFollowing
+				userWithStats.FollowRequestSent = &requestSent
+			} else {
+				userWithStats.FollowStatus = "none"
+			}
+
+			// Check reverse relationship
+			var reverseStatus sql.NullString
+			err = db.QueryRow(`
+				SELECT status FROM followers 
+				WHERE follower_id = $1 AND following_id = $2`,
+				id, requestingUserID).Scan(&reverseStatus)
+
+			if err == nil && reverseStatus.Valid {
+				isFollower := (reverseStatus.String == "accepted")
+				requestFrom := (reverseStatus.String == "pending")
 				userWithStats.IsFollower = &isFollower
+				userWithStats.FollowRequestFrom = &requestFrom
 			}
 		}
 
@@ -177,9 +213,9 @@ func CreateUser(db *sql.DB) http.HandlerFunc {
 		}
 
 		err = db.QueryRow(
-			`INSERT INTO users (username, display_name, dob, gender, email, password, created_at) 
-            VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING id, created_at`,
-			u.Username, u.DisplayName, u.DOB, u.Gender, u.Email, string(hashedPassword),
+			`INSERT INTO users (username, display_name, dob, gender, email, password, is_private, created_at) 
+            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) RETURNING id, created_at`,
+			u.Username, u.DisplayName, u.DOB, u.Gender, u.Email, string(hashedPassword), u.IsPrivate,
 		).Scan(&u.ID, &u.CreatedAt)
 
 		if err != nil {
@@ -238,6 +274,16 @@ func UpdateUser(db *sql.DB) http.HandlerFunc {
 			i++
 		}
 
+		// Check if IsPrivate was explicitly provided in the request
+		var reqBody map[string]interface{}
+		r.Body.Close()
+		// Re-read request (this is a workaround; in production, decode once and check fields)
+		if _, hasPrivacy := reqBody["is_private"]; hasPrivacy {
+			setClauses = append(setClauses, "is_private = $"+strconv.Itoa(i))
+			args = append(args, u.IsPrivate)
+			i++
+		}
+
 		if len(setClauses) == 0 {
 			http.Error(w, "No fields provided for update", http.StatusBadRequest)
 			return
@@ -256,10 +302,10 @@ func UpdateUser(db *sql.DB) http.HandlerFunc {
 
 		var updatedUser models.User
 		err = db.QueryRow(`SELECT id, username, display_name, dob, 
-            gender, email, password, created_at FROM users WHERE id = $1`, id).
+            gender, email, password, is_private, created_at FROM users WHERE id = $1`, id).
 			Scan(&updatedUser.ID, &updatedUser.Username, &updatedUser.DisplayName,
 				&updatedUser.DOB, &updatedUser.Gender, &updatedUser.Email,
-				&updatedUser.Password, &updatedUser.CreatedAt)
+				&updatedUser.Password, &updatedUser.IsPrivate, &updatedUser.CreatedAt)
 
 		if err != nil {
 			http.Error(w, "Failed to fetch updated user", http.StatusInternalServerError)
@@ -269,6 +315,34 @@ func UpdateUser(db *sql.DB) http.HandlerFunc {
 
 		updatedUser.Password = ""
 		json.NewEncoder(w).Encode(updatedUser)
+	}
+}
+
+func UpdateUserPrivacy(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		id := vars["id"]
+
+		var req struct {
+			IsPrivate bool `json:"is_private"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		_, err := db.Exec("UPDATE users SET is_private = $1 WHERE id = $2", req.IsPrivate, id)
+		if err != nil {
+			http.Error(w, "Failed to update privacy setting", http.StatusInternalServerError)
+			log.Println(err)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message":    "Privacy setting updated",
+			"is_private": req.IsPrivate,
+		})
 	}
 }
 
@@ -296,9 +370,9 @@ func SearchUsers(db *sql.DB) http.HandlerFunc {
 		if requestingUserID > 0 {
 			rows, err = db.Query(`
 				SELECT 
-					u.id, u.username, u.display_name, u.dob, u.gender, u.email, u.created_at,
-					EXISTS(SELECT 1 FROM followers WHERE follower_id = $3 AND following_id = u.id) as is_following,
-					EXISTS(SELECT 1 FROM followers WHERE follower_id = u.id AND following_id = $3) as is_follower
+					u.id, u.username, u.display_name, u.dob, u.gender, u.email, u.is_private, u.created_at,
+					COALESCE((SELECT status FROM followers WHERE follower_id = $3 AND following_id = u.id), 'none') as follow_status,
+					EXISTS(SELECT 1 FROM followers WHERE follower_id = u.id AND following_id = $3 AND status = 'accepted') as is_follower
 				FROM users u
 				WHERE (u.username ILIKE $1 OR u.display_name ILIKE $1)
 				  AND u.id != $3
@@ -311,7 +385,7 @@ func SearchUsers(db *sql.DB) http.HandlerFunc {
 				"%"+query+"%", query+"%", requestingUserID)
 		} else {
 			rows, err = db.Query(`
-				SELECT id, username, display_name, dob, gender, email, created_at
+				SELECT id, username, display_name, dob, gender, email, is_private, created_at
 				FROM users 
 				WHERE username ILIKE $1 OR display_name ILIKE $1
 				ORDER BY 
@@ -332,8 +406,11 @@ func SearchUsers(db *sql.DB) http.HandlerFunc {
 
 		type UserSearchResultWithFollow struct {
 			models.UserSearchResult
-			IsFollowing *bool `json:"is_following,omitempty"`
-			IsFollower  *bool `json:"is_follower,omitempty"`
+			IsPrivate         bool   `json:"is_private"`
+			IsFollowing       *bool  `json:"is_following,omitempty"`
+			IsFollower        *bool  `json:"is_follower,omitempty"`
+			FollowRequestSent *bool  `json:"follow_request_sent,omitempty"`
+			FollowStatus      string `json:"follow_status,omitempty"`
 		}
 
 		var users []UserSearchResultWithFollow
@@ -341,7 +418,8 @@ func SearchUsers(db *sql.DB) http.HandlerFunc {
 			var u UserSearchResultWithFollow
 
 			if requestingUserID > 0 {
-				var isFollowing, isFollower bool
+				var followStatus string
+				var isFollower bool
 				if err := rows.Scan(
 					&u.ID,
 					&u.Username,
@@ -349,14 +427,19 @@ func SearchUsers(db *sql.DB) http.HandlerFunc {
 					&u.DOB,
 					&u.Gender,
 					&u.Email,
+					&u.IsPrivate,
 					&u.CreatedAt,
-					&isFollowing,
+					&followStatus,
 					&isFollower); err != nil {
 					http.Error(w, "Error scanning search results", http.StatusInternalServerError)
 					log.Println(err)
 					return
 				}
+				u.FollowStatus = followStatus
+				isFollowing := (followStatus == "accepted")
+				requestSent := (followStatus == "pending")
 				u.IsFollowing = &isFollowing
+				u.FollowRequestSent = &requestSent
 				u.IsFollower = &isFollower
 			} else {
 				if err := rows.Scan(
@@ -366,6 +449,7 @@ func SearchUsers(db *sql.DB) http.HandlerFunc {
 					&u.DOB,
 					&u.Gender,
 					&u.Email,
+					&u.IsPrivate,
 					&u.CreatedAt); err != nil {
 					http.Error(w, "Error scanning search results", http.StatusInternalServerError)
 					log.Println(err)

@@ -13,6 +13,7 @@ type User struct {
 	DOB         CivilDate `json:"dob"`
 	Gender      string    `json:"gender"`
 	Email       string    `json:"email"`
+	IsPrivate   string    `json:"is_private"`
 	Password    string    `json:"password,omitempty"`
 	FCMToken    string    `json:"fcm_token,omitempty"`
 	CreatedAt   string    `json:"created_at"`
