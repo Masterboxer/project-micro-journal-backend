@@ -52,6 +52,12 @@ func GetUserById(db *sql.DB) http.HandlerFunc {
 		vars := mux.Vars(r)
 		id := vars["id"]
 
+		requestingUserIDStr := r.URL.Query().Get("requesting_user_id")
+		var requestingUserID int
+		if requestingUserIDStr != "" {
+			requestingUserID, _ = strconv.Atoi(requestingUserIDStr)
+		}
+
 		var u models.User
 		err := db.QueryRow(`SELECT id, username, display_name, dob, 
             gender, email, password, created_at FROM users WHERE id = $1`, id).
@@ -68,7 +74,42 @@ func GetUserById(db *sql.DB) http.HandlerFunc {
 		}
 
 		u.Password = ""
-		json.NewEncoder(w).Encode(u)
+
+		type UserWithStats struct {
+			models.User
+			FollowersCount int   `json:"followers_count"`
+			FollowingCount int   `json:"following_count"`
+			IsFollowing    *bool `json:"is_following,omitempty"`
+			IsFollower     *bool `json:"is_follower,omitempty"`
+		}
+
+		userWithStats := UserWithStats{User: u}
+
+		err = db.QueryRow(`
+			SELECT 
+				(SELECT COUNT(*) FROM followers WHERE following_id = $1) as followers,
+				(SELECT COUNT(*) FROM followers WHERE follower_id = $1) as following`,
+			id).Scan(&userWithStats.FollowersCount, &userWithStats.FollowingCount)
+
+		if err != nil {
+			log.Println("Error fetching follow stats:", err)
+		}
+
+		if requestingUserID > 0 && requestingUserID != u.ID {
+			var isFollowing, isFollower bool
+			err = db.QueryRow(`
+				SELECT 
+					EXISTS(SELECT 1 FROM followers WHERE follower_id = $1 AND following_id = $2) as following,
+					EXISTS(SELECT 1 FROM followers WHERE follower_id = $2 AND following_id = $1) as follower`,
+				requestingUserID, id).Scan(&isFollowing, &isFollower)
+
+			if err == nil {
+				userWithStats.IsFollowing = &isFollowing
+				userWithStats.IsFollower = &isFollower
+			}
+		}
+
+		json.NewEncoder(w).Encode(userWithStats)
 	}
 }
 
@@ -231,60 +272,6 @@ func UpdateUser(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func GetUserBuddies(db *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		userID, _ := strconv.Atoi(vars["user_id"])
-
-		rows, err := db.Query(`
-            SELECT u.id, u.username, u.display_name 
-            FROM buddies b 
-            JOIN users u ON b.buddy_id = u.id 
-            WHERE b.user_id = $1`, userID)
-		if err != nil {
-			http.Error(w, "Database query failed", http.StatusInternalServerError)
-			log.Println(err)
-			return
-		}
-		defer rows.Close()
-
-		var buddies []models.UserBuddies
-		for rows.Next() {
-			var b models.UserBuddies
-			if err := rows.Scan(&b.ID, &b.Username, &b.DisplayName); err != nil {
-				http.Error(w, "Error scanning buddy data", http.StatusInternalServerError)
-				log.Println(err)
-				return
-			}
-			buddies = append(buddies, b)
-		}
-
-		json.NewEncoder(w).Encode(buddies)
-	}
-}
-
-func RemoveBuddy(db *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		userID, _ := strconv.Atoi(vars["user_id"])
-		buddyID, _ := strconv.Atoi(vars["buddy_id"])
-
-		result, err := db.Exec("DELETE FROM buddies WHERE user_id = $1 AND buddy_id = $2", userID, buddyID)
-		if err != nil {
-			http.Error(w, "Failed to remove buddy", http.StatusInternalServerError)
-			log.Println(err)
-			return
-		}
-
-		if rowsAffected, _ := result.RowsAffected(); rowsAffected == 0 {
-			http.Error(w, "Buddy relationship not found", http.StatusNotFound)
-			return
-		}
-
-		json.NewEncoder(w).Encode(map[string]string{"message": "Buddy removed successfully"})
-	}
-}
-
 func SearchUsers(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("q")
@@ -293,25 +280,49 @@ func SearchUsers(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		requestingUserIDStr := r.URL.Query().Get("requesting_user_id")
+		var requestingUserID int
+		if requestingUserIDStr != "" {
+			requestingUserID, _ = strconv.Atoi(requestingUserIDStr)
+		}
+
 		if len(query) > 50 {
 			query = query[:50]
 		}
 
-		rows, err := db.Query(`
-			SELECT id, username, display_name, dob, gender, email, created_at
-			FROM users 
-			WHERE username ILIKE $1 
-			   OR display_name ILIKE $1
-			ORDER BY 
-				-- Prioritize exact matches first, then partial
-				CASE WHEN username ILIKE $2 THEN 0 ELSE 1 END +
-				CASE WHEN display_name ILIKE $2 THEN 0 ELSE 1 END,
-				-- Then by relevance (shorter distance to search term)
-				LENGTH(username) - LENGTH($1),
-				LENGTH(display_name) - LENGTH($1)
-			LIMIT 20`,
-			"%"+query+"%",
-			query+"%")
+		var rows *sql.Rows
+		var err error
+
+		if requestingUserID > 0 {
+			rows, err = db.Query(`
+				SELECT 
+					u.id, u.username, u.display_name, u.dob, u.gender, u.email, u.created_at,
+					EXISTS(SELECT 1 FROM followers WHERE follower_id = $3 AND following_id = u.id) as is_following,
+					EXISTS(SELECT 1 FROM followers WHERE follower_id = u.id AND following_id = $3) as is_follower
+				FROM users u
+				WHERE (u.username ILIKE $1 OR u.display_name ILIKE $1)
+				  AND u.id != $3
+				ORDER BY 
+					CASE WHEN u.username ILIKE $2 THEN 0 ELSE 1 END +
+					CASE WHEN u.display_name ILIKE $2 THEN 0 ELSE 1 END,
+					LENGTH(u.username) - LENGTH($1),
+					LENGTH(u.display_name) - LENGTH($1)
+				LIMIT 20`,
+				"%"+query+"%", query+"%", requestingUserID)
+		} else {
+			rows, err = db.Query(`
+				SELECT id, username, display_name, dob, gender, email, created_at
+				FROM users 
+				WHERE username ILIKE $1 OR display_name ILIKE $1
+				ORDER BY 
+					CASE WHEN username ILIKE $2 THEN 0 ELSE 1 END +
+					CASE WHEN display_name ILIKE $2 THEN 0 ELSE 1 END,
+					LENGTH(username) - LENGTH($1),
+					LENGTH(display_name) - LENGTH($1)
+				LIMIT 20`,
+				"%"+query+"%", query+"%")
+		}
+
 		if err != nil {
 			http.Error(w, "Database search failed", http.StatusInternalServerError)
 			log.Println("SearchUsers error:", err)
@@ -319,20 +330,47 @@ func SearchUsers(db *sql.DB) http.HandlerFunc {
 		}
 		defer rows.Close()
 
-		var users []models.UserSearchResult
+		type UserSearchResultWithFollow struct {
+			models.UserSearchResult
+			IsFollowing *bool `json:"is_following,omitempty"`
+			IsFollower  *bool `json:"is_follower,omitempty"`
+		}
+
+		var users []UserSearchResultWithFollow
 		for rows.Next() {
-			var u models.UserSearchResult
-			if err := rows.Scan(
-				&u.ID,
-				&u.Username,
-				&u.DisplayName,
-				&u.DOB,
-				&u.Gender,
-				&u.Email,
-				&u.CreatedAt); err != nil {
-				http.Error(w, "Error scanning search results", http.StatusInternalServerError)
-				log.Println(err)
-				return
+			var u UserSearchResultWithFollow
+
+			if requestingUserID > 0 {
+				var isFollowing, isFollower bool
+				if err := rows.Scan(
+					&u.ID,
+					&u.Username,
+					&u.DisplayName,
+					&u.DOB,
+					&u.Gender,
+					&u.Email,
+					&u.CreatedAt,
+					&isFollowing,
+					&isFollower); err != nil {
+					http.Error(w, "Error scanning search results", http.StatusInternalServerError)
+					log.Println(err)
+					return
+				}
+				u.IsFollowing = &isFollowing
+				u.IsFollower = &isFollower
+			} else {
+				if err := rows.Scan(
+					&u.ID,
+					&u.Username,
+					&u.DisplayName,
+					&u.DOB,
+					&u.Gender,
+					&u.Email,
+					&u.CreatedAt); err != nil {
+					http.Error(w, "Error scanning search results", http.StatusInternalServerError)
+					log.Println(err)
+					return
+				}
 			}
 			users = append(users, u)
 		}

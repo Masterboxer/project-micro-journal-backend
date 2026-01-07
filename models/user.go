@@ -109,3 +109,10 @@ type BuddyRequestWithUser struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
+
+type FollowerInfo struct {
+	ID          int       `json:"id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"display_name"`
+	FollowedAt  time.Time `json:"followed_at"`
+}
