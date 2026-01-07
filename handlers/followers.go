@@ -12,7 +12,6 @@ import (
 	"masterboxer.com/project-micro-journal/services"
 )
 
-// FollowUser - Send follow request (pending if private, accepted if public)
 func FollowUser(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -31,17 +30,27 @@ func FollowUser(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Check if target user exists and get privacy status
+		// Check if target user exists and get THEIR privacy status
 		var targetExists bool
 		var isPrivate bool
 		err := db.QueryRow(`
 			SELECT EXISTS(SELECT 1 FROM users WHERE id = $1),
 			       COALESCE((SELECT is_private FROM users WHERE id = $1), false)`,
 			req.FollowingID).Scan(&targetExists, &isPrivate)
-		if err != nil || !targetExists {
+
+		if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			log.Printf("Error checking user: %v", err)
+			return
+		}
+
+		if !targetExists {
 			http.Error(w, "User not found", http.StatusNotFound)
 			return
 		}
+
+		// Log for debugging
+		log.Printf("Following user %d (private: %v)", req.FollowingID, isPrivate)
 
 		// Check if already has a follow relationship (any status)
 		var existingStatus string
@@ -62,9 +71,9 @@ func FollowUser(db *sql.DB) http.HandlerFunc {
 				// Update rejected to pending
 				_, err = db.Exec(`
 					UPDATE followers 
-					SET status = $1, updated_at = NOW()
-					WHERE follower_id = $2 AND following_id = $3`,
-					"pending", followerID, req.FollowingID)
+					SET status = 'pending', updated_at = NOW()
+					WHERE follower_id = $1 AND following_id = $2`,
+					followerID, req.FollowingID)
 				if err != nil {
 					http.Error(w, "Failed to resend follow request", http.StatusInternalServerError)
 					return
@@ -78,14 +87,17 @@ func FollowUser(db *sql.DB) http.HandlerFunc {
 			}
 		} else if err != sql.ErrNoRows {
 			http.Error(w, "Database error", http.StatusInternalServerError)
+			log.Printf("Error checking existing follow: %v", err)
 			return
 		}
 
-		// Determine initial status based on privacy
+		// Determine initial status based on TARGET USER's privacy
 		status := "accepted"
 		if isPrivate {
 			status = "pending"
 		}
+
+		log.Printf("Creating follow with status: %s", status)
 
 		// Create follow relationship
 		_, err = db.Exec(`
