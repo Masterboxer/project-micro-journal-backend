@@ -274,7 +274,7 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		go UpdateStreaksAfterPost(db, p.UserID, journalDate)
+		go UpdateStreakAfterPost(db, p.UserID, journalDate)
 
 		go notifyFollowersOfNewPost(db, p.UserID, p.Text)
 
