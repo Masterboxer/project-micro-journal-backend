@@ -32,5 +32,8 @@ func CreateUserRoutes(db *sql.DB, router *mux.Router) *mux.Router {
 	router.HandleFunc("/users/{user_id}/follow-requests/{following_id}/cancel", handlers.CancelFollowRequest(db)).Methods("DELETE")
 	router.HandleFunc("/users/{id}/privacy", handlers.UpdateUserPrivacy(db)).Methods("PUT")
 
+	router.HandleFunc("/users/{userId}/streaks", handlers.GetUserStreaks(db)).Methods("GET")
+	router.HandleFunc("/streaks", handlers.GetStreakBetweenUsers(db)).Methods("GET")
+
 	return router
 }
