@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -176,65 +177,62 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		if p.UserID == 0 {
-			http.Error(w, "user_id is required", http.StatusBadRequest)
+		if p.UserID == 0 || p.TemplateID == 0 || p.Text == "" {
+			http.Error(w, "Missing required fields", http.StatusBadRequest)
 			return
 		}
-		if p.TemplateID == 0 {
-			http.Error(w, "template_id is required", http.StatusBadRequest)
-			return
-		}
-		if p.Text == "" {
-			http.Error(w, "text is required", http.StatusBadRequest)
-			return
-		}
+
 		if len(p.Text) > 280 {
-			http.Error(w, "text must be at most 280 characters", http.StatusBadRequest)
+			http.Error(w, "Text must be at most 280 characters", http.StatusBadRequest)
 			return
 		}
 
-		now := time.Now().UTC()
-		startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-		endOfDay := startOfDay.Add(24 * time.Hour)
+		var timezone string
+		err := db.QueryRow(
+			`SELECT timezone FROM users WHERE id = $1`,
+			p.UserID,
+		).Scan(&timezone)
 
-		var postCount int
-		err := db.QueryRow(`
-			SELECT COUNT(*) 
-			FROM posts 
-			WHERE user_id = $1 
-			  AND created_at >= $2 
-			  AND created_at < $3`,
-			p.UserID, startOfDay, endOfDay).Scan(&postCount)
 		if err != nil {
-			http.Error(w, "Failed to check daily limit", http.StatusInternalServerError)
-			log.Println("CreatePost daily limit check error:", err)
+			http.Error(w, "Failed to fetch user timezone", http.StatusInternalServerError)
+			log.Println("CreatePost timezone error:", err)
 			return
 		}
 
-		if postCount > 0 {
-			http.Error(w, "Daily post limit reached (1 post per day)", http.StatusForbidden)
+		journalDate, err := ComputeJournalDate(time.Now().UTC(), timezone)
+		if err != nil {
+			http.Error(w, "Failed to compute journal date", http.StatusInternalServerError)
+			log.Println("CreatePost journal date error:", err)
 			return
 		}
 
 		err = db.QueryRow(`
-			INSERT INTO posts (user_id, template_id, text, photo_path, created_at)
-			VALUES ($1, $2, $3, $4, NOW())
-			RETURNING id, user_id, template_id, text, photo_path, created_at`,
+			INSERT INTO posts (
+				user_id,
+				template_id,
+				text,
+				photo_path,
+				journal_date,
+				created_at
+			)
+			VALUES ($1, $2, $3, $4, $5, NOW())
+			RETURNING id, created_at
+		`,
 			p.UserID,
 			p.TemplateID,
 			p.Text,
 			p.PhotoPath,
-		).Scan(
-			&p.ID,
-			&p.UserID,
-			&p.TemplateID,
-			&p.Text,
-			&p.PhotoPath,
-			&p.CreatedAt,
-		)
+			journalDate,
+		).Scan(&p.ID, &p.CreatedAt)
+
 		if err != nil {
+			if strings.Contains(err.Error(), "uniq_user_journal_date") {
+				http.Error(w, "You already posted for this day", http.StatusForbidden)
+				return
+			}
+
 			http.Error(w, "Failed to create post", http.StatusInternalServerError)
-			log.Println("CreatePost error:", err)
+			log.Println("CreatePost insert error:", err)
 			return
 		}
 
@@ -244,6 +242,35 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(p)
 	}
+}
+
+func ComputeJournalDate(now time.Time, timezone string) (time.Time, error) {
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	local := now.In(loc)
+
+	cutoff := time.Date(
+		local.Year(),
+		local.Month(),
+		local.Day(),
+		6, 0, 0, 0,
+		loc,
+	)
+
+	if local.Before(cutoff) {
+		local = local.AddDate(0, 0, -1)
+	}
+
+	return time.Date(
+		local.Year(),
+		local.Month(),
+		local.Day(),
+		0, 0, 0, 0,
+		loc,
+	), nil
 }
 
 func notifyFollowersOfNewPost(db *sql.DB, userID int, postText string) {
