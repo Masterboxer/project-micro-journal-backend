@@ -32,7 +32,6 @@ func RegisterTokenHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Insert or update token in fcm_tokens table
 		query := `
 			INSERT INTO fcm_tokens (user_id, token, created_at, updated_at)
 			VALUES ($1, $2, NOW(), NOW())

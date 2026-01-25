@@ -96,9 +96,6 @@ func SendMultipleNotifications(tokens []string, title, body string, data map[str
 	return response.SuccessCount, response.FailureCount, nil
 }
 
-// SendNotificationToUser sends a notification to a specific user by their FCM token
 func SendNotificationToUser(db interface{}, userID int, title, body string, data map[string]string) error {
-	// This would query your database for the user's FCM token
-	// Implementation depends on your database setup
 	return nil
 }

@@ -244,7 +244,6 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Check if user already has a post for this journal date
 		var existingPostID int
 		var existingCreatedAt time.Time
 		err = db.QueryRow(`
@@ -261,22 +260,16 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// If a post exists for this journal date
 		if err != sql.ErrNoRows {
-			// Get the current time in user's timezone
 			loc, _ := time.LoadLocation(timezone)
 			localNow := nowUTC.In(loc)
 
-			// Check if existing post was created before noon and current time is after noon
 			existingLocalTime := existingCreatedAt.In(loc)
 
-			// If existing post was before noon (journal date) and now it's after noon (same calendar day)
 			if existingLocalTime.Hour() < 12 && localNow.Hour() >= 12 &&
 				existingLocalTime.Year() == localNow.Year() &&
 				existingLocalTime.Month() == localNow.Month() &&
 				existingLocalTime.Day() == localNow.Day() {
-				// Allow the post - this is the second post of the day (after noon)
-				// The new journal date will be the actual calendar day
 			} else {
 				http.Error(w, "You already posted for this day", http.StatusForbidden)
 				return
@@ -323,9 +316,6 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// ComputeJournalDate calculates the journal date based on a 12 PM cutoff
-// Posts made before 12 PM are assigned to the previous calendar day
-// Posts made at or after 12 PM are assigned to the current calendar day
 func ComputeJournalDate(now time.Time, timezone string) (time.Time, error) {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
@@ -334,7 +324,6 @@ func ComputeJournalDate(now time.Time, timezone string) (time.Time, error) {
 
 	local := now.In(loc)
 
-	// Set cutoff at 12:00 PM (noon)
 	cutoff := time.Date(
 		local.Year(),
 		local.Month(),
@@ -343,12 +332,10 @@ func ComputeJournalDate(now time.Time, timezone string) (time.Time, error) {
 		loc,
 	)
 
-	// If current time is before noon, assign to previous day
 	if local.Before(cutoff) {
 		local = local.AddDate(0, 0, -1)
 	}
 
-	// Return the date at midnight
 	return time.Date(
 		local.Year(),
 		local.Month(),

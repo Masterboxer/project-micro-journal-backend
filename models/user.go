@@ -94,7 +94,7 @@ type BuddyRequest struct {
 	ID          int       `json:"id"`
 	RequesterID int       `json:"requester_id"`
 	RecipientID int       `json:"recipient_id"`
-	Status      string    `json:"status"` // pending, accepted, rejected
+	Status      string    `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }

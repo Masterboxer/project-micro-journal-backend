@@ -89,7 +89,6 @@ func GetUserById(db *sql.DB) http.HandlerFunc {
 
 		userWithStats := UserWithStats{User: u}
 
-		// Get follower/following counts (accepted only)
 		err = db.QueryRow(`
 			SELECT 
 				(SELECT COUNT(*) FROM followers WHERE following_id = $1 AND status = 'accepted') as followers,
@@ -100,7 +99,6 @@ func GetUserById(db *sql.DB) http.HandlerFunc {
 			log.Println("Error fetching follow stats:", err)
 		}
 
-		// If requesting user is viewing their own profile, include pending requests count
 		if requestingUserID > 0 && requestingUserID == u.ID {
 			var pendingCount int
 			err = db.QueryRow(`
@@ -112,7 +110,6 @@ func GetUserById(db *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		// Get follow status if viewing another user's profile
 		if requestingUserID > 0 && requestingUserID != u.ID {
 			var currentStatus sql.NullString
 			err = db.QueryRow(`
@@ -130,7 +127,6 @@ func GetUserById(db *sql.DB) http.HandlerFunc {
 				userWithStats.FollowStatus = "none"
 			}
 
-			// Check reverse relationship
 			var reverseStatus sql.NullString
 			err = db.QueryRow(`
 				SELECT status FROM followers 
@@ -274,10 +270,8 @@ func UpdateUser(db *sql.DB) http.HandlerFunc {
 			i++
 		}
 
-		// Check if IsPrivate was explicitly provided in the request
 		var reqBody map[string]interface{}
 		r.Body.Close()
-		// Re-read request (this is a workaround; in production, decode once and check fields)
 		if _, hasPrivacy := reqBody["is_private"]; hasPrivacy {
 			setClauses = append(setClauses, "is_private = $"+strconv.Itoa(i))
 			args = append(args, u.IsPrivate)
