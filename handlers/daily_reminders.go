@@ -11,7 +11,7 @@ import (
 
 func SendDailyReminderNotifications(db *sql.DB) {
 	nowUTC := time.Now().UTC()
-	log.Printf("[DailyReminder] Job started at UTC: %v", nowUTC)
+	log.Printf("[DailyReminder] Job started at %v UTC", nowUTC)
 
 	rows, err := db.Query(`
 		SELECT id, timezone
@@ -19,7 +19,7 @@ func SendDailyReminderNotifications(db *sql.DB) {
 		WHERE timezone IS NOT NULL
 	`)
 	if err != nil {
-		log.Printf("[DailyReminder] ❌ Failed to fetch users: %v", err)
+		log.Printf("[DailyReminder] Failed to fetch users: %v", err)
 		return
 	}
 	defer rows.Close()
@@ -29,33 +29,25 @@ func SendDailyReminderNotifications(db *sql.DB) {
 		var timezone string
 
 		if err := rows.Scan(&userID, &timezone); err != nil {
-			log.Printf("[DailyReminder] ❌ Scan error: %v", err)
+			log.Printf("[DailyReminder] Scan error: %v", err)
 			continue
 		}
 
-		log.Printf("[DailyReminder] 👤 Checking user %d (tz=%s)", userID, timezone)
-
 		loc, err := time.LoadLocation(timezone)
 		if err != nil {
-			log.Printf("[DailyReminder] ❌ Invalid timezone for user %d: %v", userID, err)
 			continue
 		}
 
 		localNow := nowUTC.In(loc)
-		log.Printf(
-			"[DailyReminder] 🕒 User %d local time: %02d:%02d",
-			userID,
-			localNow.Hour(),
-			localNow.Minute(),
-		)
 
+		// 9:00–9:05 PM local time window
 		if localNow.Hour() != 21 || localNow.Minute() > 5 {
 			continue
 		}
 
 		journalDate, err := ComputeJournalDate(nowUTC, timezone)
 		if err != nil {
-			log.Printf("[DailyReminder] ❌ Journal date error for user %d: %v", userID, err)
+			log.Printf("[DailyReminder] Journal date error for user %d: %v", userID, err)
 			continue
 		}
 
@@ -67,61 +59,48 @@ func SendDailyReminderNotifications(db *sql.DB) {
 			)
 		`, userID, journalDate).Scan(&exists)
 
-		if err != nil {
-			log.Printf("[DailyReminder] ❌ Post check failed for user %d: %v", userID, err)
+		if err != nil || exists {
 			continue
 		}
 
-		if exists {
-			log.Printf("[DailyReminder] ⏭️ User %d already posted today", userID)
-			continue
-		}
-
-		tokenRows, err := db.Query(`
+		rowsTokens, err := db.Query(`
 			SELECT token FROM fcm_tokens
-			WHERE user_id = $1
-			  AND token IS NOT NULL
-			  AND token != ''
+			WHERE user_id = $1 AND token IS NOT NULL AND token != ''
 		`, userID)
 		if err != nil {
-			log.Printf("[DailyReminder] ❌ Token fetch failed for user %d: %v", userID, err)
 			continue
 		}
 
 		var tokens []string
-		for tokenRows.Next() {
+		for rowsTokens.Next() {
 			var token string
-			if err := tokenRows.Scan(&token); err == nil {
+			if err := rowsTokens.Scan(&token); err == nil {
 				tokens = append(tokens, token)
 			}
 		}
-		tokenRows.Close()
+		rowsTokens.Close()
 
 		if len(tokens) == 0 {
-			log.Printf("[DailyReminder] ⏭️ User %d has NO FCM tokens", userID)
 			continue
 		}
 
-		log.Printf("[DailyReminder] 📲 Sending notification to user %d (%d tokens)", userID, len(tokens))
-
-		title := "Time to reflect 📝"
-		body := "You haven't journaled today. Take a minute for yourself."
-
-		data := map[string]string{
-			"type":    "daily_reminder",
-			"user_id": strconv.Itoa(userID),
-		}
-
-		success, failure, err :=
-			services.SendMultipleNotifications(tokens, title, body, data)
+		success, failure, err := services.SendMultipleNotifications(
+			tokens,
+			"Time to reflect 📝",
+			"You haven't added to your micro journal today. Take a minute for yourself and your loved ones",
+			map[string]string{
+				"type":    "daily_reminder",
+				"user_id": strconv.Itoa(userID),
+			},
+		)
 
 		if err != nil {
-			log.Printf("[DailyReminder] ❌ FCM error for user %d: %v", userID, err)
+			log.Printf("[DailyReminder] FCM error for user %d: %v", userID, err)
 			continue
 		}
 
 		log.Printf(
-			"[DailyReminder] ✅ User %d → %d sent, %d failed",
+			"[DailyReminder] User %d → %d sent, %d failed",
 			userID, success, failure,
 		)
 	}
