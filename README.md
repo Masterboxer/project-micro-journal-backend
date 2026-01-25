@@ -13,5 +13,8 @@ Create a new migration
 Create DB Backup
 `docker exec -t backend-micro_journal_db-1 pg_dump -U postgres journal > backup.sql`
 
-Run CRON Job Service
+Run CRON Job Service for Daily Reminders
 `docker compose run --rm daily-reminder-worker`
+
+Run CRON Job Service for Streak Reminders
+`docker compose run --rm streak-reminder-worker`
