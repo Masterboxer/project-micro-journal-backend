@@ -95,26 +95,29 @@ func UpdateStreakAfterPost(db *sql.DB, userID int, journalDate time.Time) {
 			VALUES ($1, 1, 1, $2)
 		`, userID, journalDate)
 		if err != nil {
-			log.Printf("Failed to create streak: %v", err)
+			log.Printf("Failed to create streak for user %d: %v", userID, err)
 		}
 		return
 	} else if err != nil {
-		log.Printf("Failed to query streak: %v", err)
+		log.Printf("Failed to query streak for user %d: %v", userID, err)
 		return
 	}
 
 	var lastDate *time.Time
 	if lastPostDate.Valid {
-		t, err := time.Parse("2006-01-02", lastPostDate.String)
+		t, err := time.Parse(time.RFC3339, lastPostDate.String)
 		if err != nil {
-			log.Printf("Failed to parse last_post_date: %v", err)
-			return
+			t, err = time.Parse("2006-01-02", lastPostDate.String)
+			if err != nil {
+				log.Printf("Failed to parse last_post_date for user %d: %v", userID, err)
+				return
+			}
 		}
-		lastDate = &t
+		normalized := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+		lastDate = &normalized
 	}
 
 	if lastDate != nil && lastDate.Equal(journalDate) {
-		log.Printf("Post for journal_date %s already counted in streak", journalDate.Format("2006-01-02"))
 		return
 	}
 
@@ -126,8 +129,6 @@ func UpdateStreakAfterPost(db *sql.DB, userID int, journalDate time.Time) {
 			newCount = currentCount + 1
 		} else if lastDate.After(yesterday) {
 			newCount = currentCount
-			log.Printf("Warning: Posting for date %s which is before or equal to last_post_date %s",
-				journalDate.Format("2006-01-02"), lastDate.Format("2006-01-02"))
 		}
 	}
 
@@ -146,10 +147,6 @@ func UpdateStreakAfterPost(db *sql.DB, userID int, journalDate time.Time) {
 	`, newCount, newLongestStreak, journalDate, streakID)
 
 	if err != nil {
-		log.Printf("Failed to update streak: %v", err)
-		return
+		log.Printf("Failed to update streak for user %d: %v", userID, err)
 	}
-
-	log.Printf("Updated streak for user %d: count=%d, longest=%d, journal_date=%s",
-		userID, newCount, newLongestStreak, journalDate.Format("2006-01-02"))
 }
