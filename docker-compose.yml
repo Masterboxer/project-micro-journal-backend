@@ -9,13 +9,30 @@ services:
     command: air
     environment:
       DATABASE_URL: postgres://postgres:postgres@micro_journal_db:5432/journal?sslmode=disable
-
+      FIREBASE_CREDENTIALS_PATH: /app/project-micro-journal-firebase-adminsdk-fbsvc-e626a40f9b.json
     ports:
       - "8200:8200"
     depends_on:
       - micro_journal_db
     networks:
       - journal-net
+
+  daily-reminder-worker:
+    image: masterboxer/micro-journal-app:1.0.0
+    build:
+      context: .
+    volumes:
+      - .:/app
+      - go-mod-cache:/go/pkg/mod
+    command: go run cmd/daily_reminder/main.go
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@micro_journal_db:5432/journal?sslmode=disable
+      FIREBASE_CREDENTIALS_PATH: /app/project-micro-journal-firebase-adminsdk-fbsvc-e626a40f9b.json
+    depends_on:
+      - micro_journal_db
+    networks:
+      - journal-net
+    restart: "no"
 
   micro_journal_db:
     image: postgres:17
