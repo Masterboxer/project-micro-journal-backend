@@ -89,6 +89,7 @@ func SendStreakExpiryNotifications(db *sql.DB) {
 		}
 
 		success, failure, err := services.SendMultipleNotifications(
+			db,
 			tokens,
 			"🔥 Don't let your streak expire today!",
 			"You have less than an hour to post and keep your streak alive, so let's do that now?",

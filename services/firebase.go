@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"sync"
 
@@ -19,28 +20,33 @@ var (
 func InitFirebase(credentialsPath string) error {
 	once.Do(func() {
 		ctx := context.Background()
+
+		log.Printf("[FCM] Initializing Firebase with credentials: %s", credentialsPath)
+
 		opt := option.WithCredentialsFile(credentialsPath)
 		app, err := firebase.NewApp(ctx, nil, opt)
 		if err != nil {
 			initError = err
-			log.Printf("Error initializing Firebase app: %v", err)
+			log.Printf("[FCM][ERROR] Failed to init Firebase app: %v", err)
 			return
 		}
 
 		messagingClient, err = app.Messaging(ctx)
 		if err != nil {
 			initError = err
-			log.Printf("Error getting Messaging client: %v", err)
+			log.Printf("[FCM][ERROR] Failed to get messaging client: %v", err)
 			return
 		}
 
-		log.Println("Firebase Messaging client initialized successfully")
+		log.Println("[FCM] Firebase Messaging client initialized successfully")
 	})
+
 	return initError
 }
 
 func GetMessagingClient() (*messaging.Client, error) {
 	if messagingClient == nil {
+		log.Printf("[FCM][ERROR] Messaging client is nil (initError=%v)", initError)
 		return nil, initError
 	}
 	return messagingClient, nil
@@ -71,10 +77,27 @@ func SendNotification(deviceToken, title, body string, data map[string]string) e
 	return nil
 }
 
-func SendMultipleNotifications(tokens []string, title, body string, data map[string]string) (int, int, error) {
+func SendMultipleNotifications(
+	db *sql.DB,
+	tokens []string,
+	title, body string,
+	data map[string]string,
+) (int, int, error) {
+
 	client, err := GetMessagingClient()
 	if err != nil {
 		return 0, 0, err
+	}
+
+	log.Printf(
+		"[FCM] Sending multicast | tokens=%d title=%q",
+		len(tokens),
+		title,
+	)
+
+	// Log first token (helps debugging project mismatch)
+	if len(tokens) > 0 {
+		log.Printf("[FCM] Sample token: %s...", tokens[0][:min(10, len(tokens[0]))])
 	}
 
 	message := &messaging.MulticastMessage{
@@ -88,12 +111,53 @@ func SendMultipleNotifications(tokens []string, title, body string, data map[str
 
 	response, err := client.SendEachForMulticast(context.Background(), message)
 	if err != nil {
-		log.Printf("Error sending multicast: %v", err)
+		log.Printf("[FCM][ERROR] Multicast send failed entirely: %v", err)
 		return 0, 0, err
 	}
 
-	log.Printf("Success: %d, Failure: %d", response.SuccessCount, response.FailureCount)
+	log.Printf(
+		"[FCM] Multicast result | success=%d failure=%d",
+		response.SuccessCount,
+		response.FailureCount,
+	)
+
+	// 🔥 PER-TOKEN ERROR LOGGING (CRITICAL)
+	for i, resp := range response.Responses {
+		if resp.Success {
+			continue
+		}
+
+		token := tokens[i]
+		log.Printf(
+			"[FCM][TOKEN ERROR] token=%s error=%v",
+			token,
+			resp.Error,
+		)
+
+		// Detect dead tokens explicitly
+		if messaging.IsUnregistered(resp.Error) {
+			log.Printf("[FCM] Deleting dead token: %s", token)
+
+			_, err := db.Exec(`
+					DELETE FROM fcm_tokens
+					WHERE token = $1
+				`, token)
+
+			if err != nil {
+				log.Printf("[FCM][ERROR] Failed to delete token %s: %v", token, err)
+			}
+		}
+
+	}
+
 	return response.SuccessCount, response.FailureCount, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func SendNotificationToUser(db interface{}, userID int, title, body string, data map[string]string) error {

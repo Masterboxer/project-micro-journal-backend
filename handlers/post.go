@@ -396,7 +396,7 @@ func notifyFollowersOfNewPost(db *sql.DB, userID int, postText string) {
 		"user_id": strconv.Itoa(userID),
 	}
 
-	successCount, failureCount, err := services.SendMultipleNotifications(tokens, title, body, data)
+	successCount, failureCount, err := services.SendMultipleNotifications(db, tokens, title, body, data)
 	if err != nil {
 		log.Printf("Error sending notifications to followers: %v", err)
 		return
@@ -878,7 +878,7 @@ func notifyPostOwnerOfReaction(db *sql.DB, postID int, reactorUserID int, reacti
 		"post_owner_id": strconv.Itoa(postOwnerID),
 	}
 
-	successCount, failureCount, err := services.SendMultipleNotifications(tokens, title, body, data)
+	successCount, failureCount, err := services.SendMultipleNotifications(db, tokens, title, body, data)
 	if err != nil {
 		log.Printf("Error sending reaction notification: %v", err)
 		return
@@ -960,7 +960,7 @@ func notifyPostOwnerOfComment(db *sql.DB, postID int, commenterUserID int, comme
 		"comment_text":  commentText,
 	}
 
-	successCount, failureCount, err := services.SendMultipleNotifications(tokens, title, body, data)
+	successCount, failureCount, err := services.SendMultipleNotifications(db, tokens, title, body, data)
 	if err != nil {
 		log.Printf("Error sending comment notification: %v", err)
 		return

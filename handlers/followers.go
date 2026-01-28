@@ -564,7 +564,7 @@ func notifyNewFollower(db *sql.DB, followerID, followingID int) {
 			"type":        "new_follower",
 			"follower_id": strconv.Itoa(followerID),
 		}
-		services.SendMultipleNotifications(tokens, "New Follower",
+		services.SendMultipleNotifications(db, tokens, "New Follower",
 			followerName+" started following you!", data)
 	}
 }
@@ -601,7 +601,7 @@ func notifyFollowRequest(db *sql.DB, followerID, followingID int) {
 			"type":        "follow_request",
 			"follower_id": strconv.Itoa(followerID),
 		}
-		services.SendMultipleNotifications(tokens, "Follow Request",
+		services.SendMultipleNotifications(db, tokens, "Follow Request",
 			followerName+" wants to follow you", data)
 	}
 }
@@ -638,7 +638,7 @@ func notifyFollowAccepted(db *sql.DB, accepterID, followerID int) {
 			"type":    "follow_accepted",
 			"user_id": strconv.Itoa(accepterID),
 		}
-		services.SendMultipleNotifications(tokens, "Follow Request Accepted",
+		services.SendMultipleNotifications(db, tokens, "Follow Request Accepted",
 			accepterName+" accepted your follow request!", data)
 	}
 }
