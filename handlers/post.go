@@ -120,12 +120,9 @@ func GetUserFeed(db *sql.DB) http.HandlerFunc {
 				p.journal_date,
 				u.username,
 				u.display_name,
-				COALESCE((SELECT COUNT(*) FROM likes WHERE post_id = p.id), 0) AS like_count,
 				COALESCE((SELECT COUNT(*) FROM comments WHERE post_id = p.id), 0) AS comment_count,
-				EXISTS(
-					SELECT 1 FROM likes 
-					WHERE post_id = p.id AND user_id = $1
-				) AS is_liked_by_user
+				COALESCE((SELECT COUNT(*) FROM reactions WHERE post_id = p.id), 0) AS total_reactions,
+				(SELECT reaction_type FROM reactions WHERE post_id = p.id AND user_id = $1) AS user_reaction
 			FROM posts p
 			JOIN users u ON p.user_id = u.id
 			WHERE (
@@ -152,18 +149,18 @@ func GetUserFeed(db *sql.DB) http.HandlerFunc {
 		var feed []map[string]interface{}
 		for rows.Next() {
 			var post struct {
-				ID           int
-				UserID       int
-				TemplateID   int
-				Text         string
-				PhotoPath    string
-				CreatedAt    time.Time
-				JournalDate  time.Time
-				Username     string
-				DisplayName  string
-				LikeCount    int
-				CommentCount int
-				IsLiked      bool
+				ID             int
+				UserID         int
+				TemplateID     int
+				Text           string
+				PhotoPath      string
+				CreatedAt      time.Time
+				JournalDate    time.Time
+				Username       string
+				DisplayName    string
+				CommentCount   int
+				TotalReactions int
+				UserReaction   sql.NullString
 			}
 
 			if err := rows.Scan(
@@ -176,28 +173,33 @@ func GetUserFeed(db *sql.DB) http.HandlerFunc {
 				&post.JournalDate,
 				&post.Username,
 				&post.DisplayName,
-				&post.LikeCount,
 				&post.CommentCount,
-				&post.IsLiked,
+				&post.TotalReactions,
+				&post.UserReaction,
 			); err != nil {
 				http.Error(w, "Error scanning feed", http.StatusInternalServerError)
 				log.Println("GetUserFeed scan error:", err)
 				return
 			}
 
+			var userReaction interface{} = nil
+			if post.UserReaction.Valid {
+				userReaction = post.UserReaction.String
+			}
+
 			feed = append(feed, map[string]interface{}{
-				"id":               post.ID,
-				"user_id":          post.UserID,
-				"template_id":      post.TemplateID,
-				"text":             post.Text,
-				"photo_path":       post.PhotoPath,
-				"created_at":       post.CreatedAt.Format(time.RFC3339),
-				"journal_date":     post.JournalDate.Format("2006-01-02"),
-				"username":         post.Username,
-				"display_name":     post.DisplayName,
-				"like_count":       post.LikeCount,
-				"comment_count":    post.CommentCount,
-				"is_liked_by_user": post.IsLiked,
+				"id":              post.ID,
+				"user_id":         post.UserID,
+				"template_id":     post.TemplateID,
+				"text":            post.Text,
+				"photo_path":      post.PhotoPath,
+				"created_at":      post.CreatedAt.Format(time.RFC3339),
+				"journal_date":    post.JournalDate.Format("2006-01-02"),
+				"username":        post.Username,
+				"display_name":    post.DisplayName,
+				"comment_count":   post.CommentCount,
+				"total_reactions": post.TotalReactions,
+				"user_reaction":   userReaction,
 			})
 		}
 
@@ -510,17 +512,26 @@ func GetTodayPostForUser(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func ToggleLike(db *sql.DB) http.HandlerFunc {
+func AddReaction(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		postIDStr := vars["postId"]
 
 		var req struct {
-			UserID int `json:"user_id"`
+			UserID       int    `json:"user_id"`
+			ReactionType string `json:"reaction_type"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		validReactions := map[string]bool{
+			"heart": true, "laugh": true, "sad": true, "angry": true, "surprised": true,
+		}
+		if !validReactions[req.ReactionType] {
+			http.Error(w, "Invalid reaction type", http.StatusBadRequest)
 			return
 		}
 
@@ -530,102 +541,128 @@ func ToggleLike(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		var existingLikeID int
+		var existingReactionID int
+		var existingReactionType string
 		err = db.QueryRow(`
-            SELECT id FROM likes WHERE user_id = $1 AND post_id = $2`,
-			req.UserID, postID).Scan(&existingLikeID)
+            SELECT id, reaction_type FROM reactions 
+            WHERE user_id = $1 AND post_id = $2`,
+			req.UserID, postID).Scan(&existingReactionID, &existingReactionType)
 
 		if err == sql.ErrNoRows {
-			var likeID int
+			var reactionID int
 			err = db.QueryRow(`
-                INSERT INTO likes (user_id, post_id)
-                VALUES ($1, $2)
+                INSERT INTO reactions (user_id, post_id, reaction_type)
+                VALUES ($1, $2, $3)
                 RETURNING id`,
-				req.UserID, postID).Scan(&likeID)
+				req.UserID, postID, req.ReactionType).Scan(&reactionID)
 
 			if err != nil {
-				http.Error(w, "Failed to create like", http.StatusInternalServerError)
-				log.Println("ToggleLike create error:", err)
+				http.Error(w, "Failed to create reaction", http.StatusInternalServerError)
+				log.Println("AddReaction create error:", err)
 				return
 			}
 
-			go notifyPostOwnerOfLike(db, postID, req.UserID)
+			go notifyPostOwnerOfReaction(db, postID, req.UserID, req.ReactionType)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"liked":   true,
-				"like_id": likeID,
+				"reaction_id":   reactionID,
+				"reaction_type": req.ReactionType,
 			})
 		} else if err != nil {
 			http.Error(w, "Database error", http.StatusInternalServerError)
-			log.Println("ToggleLike query error:", err)
+			log.Println("AddReaction query error:", err)
 			return
 		} else {
-			_, err = db.Exec(`DELETE FROM likes WHERE id = $1`, existingLikeID)
-			if err != nil {
-				http.Error(w, "Failed to remove like", http.StatusInternalServerError)
-				log.Println("ToggleLike delete error:", err)
-				return
-			}
+			if existingReactionType == req.ReactionType {
+				_, err = db.Exec(`DELETE FROM reactions WHERE id = $1`, existingReactionID)
+				if err != nil {
+					http.Error(w, "Failed to remove reaction", http.StatusInternalServerError)
+					log.Println("AddReaction delete error:", err)
+					return
+				}
 
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"liked": false,
-			})
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"removed": true,
+				})
+			} else {
+				_, err = db.Exec(`
+                    UPDATE reactions 
+                    SET reaction_type = $1, created_at = NOW() 
+                    WHERE id = $2`,
+					req.ReactionType, existingReactionID)
+
+				if err != nil {
+					http.Error(w, "Failed to update reaction", http.StatusInternalServerError)
+					log.Println("AddReaction update error:", err)
+					return
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"reaction_id":   existingReactionID,
+					"reaction_type": req.ReactionType,
+					"updated":       true,
+				})
+			}
 		}
 	}
 }
 
-func GetPostLikes(db *sql.DB) http.HandlerFunc {
+func GetPostReactions(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		postID := vars["postId"]
 
 		rows, err := db.Query(`
-            SELECT l.id, l.post_id, l.user_id, l.created_at,
+            SELECT r.id, r.post_id, r.user_id, r.reaction_type, r.created_at,
                    u.username, u.display_name
-            FROM likes l
-            JOIN users u ON l.user_id = u.id
-            WHERE l.post_id = $1
-            ORDER BY l.created_at DESC`,
+            FROM reactions r
+            JOIN users u ON r.user_id = u.id
+            WHERE r.post_id = $1
+            ORDER BY r.created_at DESC`,
 			postID)
 
 		if err != nil {
-			http.Error(w, "Failed to fetch likes", http.StatusInternalServerError)
-			log.Println("GetPostLikes error:", err)
+			http.Error(w, "Failed to fetch reactions", http.StatusInternalServerError)
+			log.Println("GetPostReactions error:", err)
 			return
 		}
 		defer rows.Close()
 
-		var likes []map[string]interface{}
+		var reactions []map[string]interface{}
 		for rows.Next() {
-			var like struct {
-				ID          int
-				PostID      int
-				UserID      int
-				CreatedAt   string
-				Username    string
-				DisplayName string
+			var reaction struct {
+				ID           int
+				PostID       int
+				UserID       int
+				ReactionType string
+				CreatedAt    string
+				Username     string
+				DisplayName  string
 			}
 
-			if err := rows.Scan(&like.ID, &like.PostID, &like.UserID,
-				&like.CreatedAt, &like.Username, &like.DisplayName); err != nil {
-				http.Error(w, "Error scanning likes", http.StatusInternalServerError)
+			if err := rows.Scan(&reaction.ID, &reaction.PostID, &reaction.UserID,
+				&reaction.ReactionType, &reaction.CreatedAt,
+				&reaction.Username, &reaction.DisplayName); err != nil {
+				http.Error(w, "Error scanning reactions", http.StatusInternalServerError)
 				return
 			}
 
-			likes = append(likes, map[string]interface{}{
-				"id":           like.ID,
-				"post_id":      like.PostID,
-				"user_id":      like.UserID,
-				"created_at":   like.CreatedAt,
-				"username":     like.Username,
-				"display_name": like.DisplayName,
+			reactions = append(reactions, map[string]interface{}{
+				"id":            reaction.ID,
+				"post_id":       reaction.PostID,
+				"user_id":       reaction.UserID,
+				"reaction_type": reaction.ReactionType,
+				"created_at":    reaction.CreatedAt,
+				"username":      reaction.Username,
+				"display_name":  reaction.DisplayName,
 			})
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(likes)
+		json.NewEncoder(w).Encode(reactions)
 	}
 }
 
@@ -761,10 +798,10 @@ func DeleteComment(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func notifyPostOwnerOfLike(db *sql.DB, postID int, likerUserID int) {
+func notifyPostOwnerOfReaction(db *sql.DB, postID int, reactorUserID int, reactionType string) {
 	var postOwnerID int
 	var postText string
-	var likerDisplayName string
+	var reactorDisplayName string
 
 	err := db.QueryRow(`
 		SELECT user_id, text 
@@ -772,22 +809,22 @@ func notifyPostOwnerOfLike(db *sql.DB, postID int, likerUserID int) {
 		WHERE id = $1`, postID).Scan(&postOwnerID, &postText)
 
 	if err != nil {
-		log.Printf("Error fetching post info for like notification: %v", err)
+		log.Printf("Error fetching post info for reaction notification: %v", err)
 		return
 	}
 
-	if postOwnerID == likerUserID {
+	if postOwnerID == reactorUserID {
 		return
 	}
 
 	err = db.QueryRow(`
 		SELECT display_name 
 		FROM users 
-		WHERE id = $1`, likerUserID).Scan(&likerDisplayName)
+		WHERE id = $1`, reactorUserID).Scan(&reactorDisplayName)
 
 	if err != nil {
-		log.Printf("Error fetching liker display name: %v", err)
-		likerDisplayName = "Someone"
+		log.Printf("Error fetching reactor display name: %v", err)
+		reactorDisplayName = "Someone"
 	}
 
 	rows, err := db.Query(`
@@ -815,30 +852,39 @@ func notifyPostOwnerOfLike(db *sql.DB, postID int, likerUserID int) {
 	}
 
 	if len(tokens) == 0 {
-		log.Printf("No FCM tokens found for post owner %d", postOwnerID)
 		return
 	}
 
-	title := fmt.Sprintf("%s liked your post", likerDisplayName)
+	reactionEmojis := map[string]string{
+		"heart":     "❤️",
+		"laugh":     "😂",
+		"sad":       "😢",
+		"angry":     "😠",
+		"surprised": "🤯",
+	}
+
+	emoji := reactionEmojis[reactionType]
+	title := fmt.Sprintf("%s reacted %s to your post", reactorDisplayName, emoji)
 	body := postText
 	if len(body) > 100 {
 		body = body[:97] + "..."
 	}
 
 	data := map[string]string{
-		"type":          "post_like",
+		"type":          "post_reaction",
 		"post_id":       strconv.Itoa(postID),
-		"liker_id":      strconv.Itoa(likerUserID),
+		"reactor_id":    strconv.Itoa(reactorUserID),
+		"reaction_type": reactionType,
 		"post_owner_id": strconv.Itoa(postOwnerID),
 	}
 
 	successCount, failureCount, err := services.SendMultipleNotifications(tokens, title, body, data)
 	if err != nil {
-		log.Printf("Error sending like notification: %v", err)
+		log.Printf("Error sending reaction notification: %v", err)
 		return
 	}
 
-	log.Printf("Sent like notification for post %d: %d successful, %d failed",
+	log.Printf("Sent reaction notification for post %d: %d successful, %d failed",
 		postID, successCount, failureCount)
 }
 
