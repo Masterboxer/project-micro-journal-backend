@@ -143,6 +143,14 @@ func UpdateStreakAfterPost(db *sql.DB, userID int, journalDate time.Time) {
 	if lastDate != nil {
 		yesterday := lastDate.AddDate(0, 0, 1)
 
+		log.Printf("🔍 DEBUG: lastDate=%s, yesterday=%s, journalDate=%s",
+			lastDate.Format("2006-01-02"),
+			yesterday.Format("2006-01-02"),
+			journalDate.Format("2006-01-02"))
+		log.Printf("🔍 DEBUG: Equal check: %v, Before check: %v",
+			journalDate.Equal(yesterday),
+			journalDate.Before(*lastDate))
+
 		switch {
 		case journalDate.Equal(*lastDate):
 			// Duplicate - ignore
