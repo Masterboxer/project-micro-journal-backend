@@ -48,7 +48,7 @@ func SendDailyReminderNotifications(db *sql.DB) {
 			userID, localNow, localNow.Hour(), localNow.Minute())
 
 		// 9:00–9:05 PM local time window
-		if localNow.Hour() != 21 || localNow.Minute() > 5 {
+		if localNow.Hour() != 21 || localNow.Minute() > 7 {
 			log.Printf("[DailyReminder] User %d outside time window (need 21:00-21:05, got %02d:%02d)",
 				userID, localNow.Hour(), localNow.Minute())
 			continue

@@ -43,8 +43,8 @@ func SendStreakExpiryNotifications(db *sql.DB) {
 
 		localNow := nowUTC.In(loc)
 
-		// ✅ Only between 10:00 AM and 12:00 PM local time
-		if localNow.Hour() < 10 || localNow.Hour() >= 12 {
+		// Only between 12:00 PM and 12:15 PM local time
+		if localNow.Hour() != 12 || localNow.Minute() > 15 {
 			continue
 		}
 
