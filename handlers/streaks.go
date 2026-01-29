@@ -141,37 +141,34 @@ func UpdateStreakAfterPost(db *sql.DB, userID int, journalDate time.Time) {
 	newCount := 1
 
 	if lastDate != nil {
+		yesterday := lastDate.AddDate(0, 0, 1)
+
 		switch {
 		case journalDate.Equal(*lastDate):
-			log.Printf(
-				"⚠️ Duplicate journal_date %s, streak already counted",
-				journalDate.Format("2006-01-02"),
-			)
+			// Duplicate - ignore
+			log.Printf("⚠️ Duplicate journal_date %s, streak already counted",
+				journalDate.Format("2006-01-02"))
 			return
 
-		case journalDate.Equal(lastDate.AddDate(0, 0, 1)):
-			newCount = currentCount + 1
-			log.Printf(
-				"✅ Consecutive day! Incrementing streak: %d → %d",
-				currentCount,
-				newCount,
-			)
-
-		case journalDate.After(lastDate.AddDate(0, 0, 1)):
-			newCount = 1
-			log.Printf(
-				"⚠️ Gap detected. Resetting streak to 1 (last=%s, current=%s)",
-				lastDate.Format("2006-01-02"),
+		case journalDate.Before(*lastDate):
+			// Out of order - posting for a date in the past
+			log.Printf("⚠️ Out-of-order journal_date %s < last_post_date %s, ignoring",
 				journalDate.Format("2006-01-02"),
-			)
+				lastDate.Format("2006-01-02"))
+			return
+
+		case journalDate.Equal(yesterday):
+			// Consecutive day - increment
+			newCount = currentCount + 1
+			log.Printf("✅ Consecutive day! Incrementing streak: %d → %d",
+				currentCount, newCount)
 
 		default:
-			log.Printf(
-				"⚠️ Out-of-order journal_date %s < last_post_date %s, ignoring",
-				journalDate.Format("2006-01-02"),
+			// Gap detected - reset streak
+			newCount = 1
+			log.Printf("⚠️ Gap detected. Resetting streak to 1 (last=%s, current=%s)",
 				lastDate.Format("2006-01-02"),
-			)
-			return
+				journalDate.Format("2006-01-02"))
 		}
 	}
 
