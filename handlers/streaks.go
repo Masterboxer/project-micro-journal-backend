@@ -114,7 +114,7 @@ func UpdateStreakAfterPost(db *sql.DB, userID int, journalDate time.Time) {
 				updated_at
 			)
 			VALUES ($1, 1, 1, $2, NOW(), NOW())
-		`, userID, journalDate)
+		`, userID, journalDateOnly)
 
 		if err != nil {
 			log.Printf("❌ Failed to create streak: %v", err)

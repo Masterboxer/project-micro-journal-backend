@@ -263,19 +263,9 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 		}
 
 		if err != sql.ErrNoRows {
-			loc, _ := time.LoadLocation(timezone)
-			localNow := nowUTC.In(loc)
-
-			existingLocalTime := existingCreatedAt.In(loc)
-
-			if existingLocalTime.Hour() < 12 && localNow.Hour() >= 12 &&
-				existingLocalTime.Year() == localNow.Year() &&
-				existingLocalTime.Month() == localNow.Month() &&
-				existingLocalTime.Day() == localNow.Day() {
-			} else {
-				http.Error(w, "You already posted for this day", http.StatusForbidden)
-				return
-			}
+			// A post already exists for this journal_date
+			http.Error(w, "You already posted for this day", http.StatusForbidden)
+			return
 		}
 
 		err = db.QueryRow(`
@@ -318,33 +308,29 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func ComputeJournalDate(now time.Time, timezone string) (time.Time, error) {
+func ComputeJournalDate(nowUTC time.Time, timezone string) (time.Time, error) {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
 		return time.Time{}, err
 	}
 
-	local := now.In(loc)
+	localTime := nowUTC.In(loc)
 
-	cutoff := time.Date(
-		local.Year(),
-		local.Month(),
-		local.Day(),
-		12, 0, 0, 0,
-		loc,
-	)
-
-	if local.Before(cutoff) {
-		local = local.AddDate(0, 0, -1)
+	// If it's before noon, attribute to PREVIOUS day
+	if localTime.Hour() < 12 {
+		localTime = localTime.AddDate(0, 0, -1)
 	}
 
-	return time.Date(
-		local.Year(),
-		local.Month(),
-		local.Day(),
+	// Return date-only (no time components)
+	journalDate := time.Date(
+		localTime.Year(),
+		localTime.Month(),
+		localTime.Day(),
 		0, 0, 0, 0,
-		loc,
-	), nil
+		time.UTC,
+	)
+
+	return journalDate, nil
 }
 
 func notifyFollowersOfNewPost(db *sql.DB, userID int, postText string) {
