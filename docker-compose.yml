@@ -18,6 +18,7 @@ services:
       - journal-net
 
   daily-reminder-worker:
+    profiles: ["workers"]
     image: masterboxer/micro-journal-app:1.0.0
     build:
       context: .
@@ -35,6 +36,7 @@ services:
     restart: "no"
 
   streak-reminder-worker:
+    profiles: ["workers"]
     image: masterboxer/micro-journal-app:1.0.0
     build:
       context: .
