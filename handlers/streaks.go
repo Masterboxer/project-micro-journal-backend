@@ -78,8 +78,17 @@ func GetUserStreak(db *sql.DB) http.HandlerFunc {
 }
 
 func UpdateStreakAfterPost(db *sql.DB, userID int, journalDate time.Time) {
+	// Normalize journalDate to date-only at the start
+	journalDateOnly := time.Date(
+		journalDate.Year(),
+		journalDate.Month(),
+		journalDate.Day(),
+		0, 0, 0, 0,
+		time.UTC,
+	)
+
 	log.Printf("🔥 UpdateStreakAfterPost called for user %d, journal_date: %s",
-		userID, journalDate.Format("2006-01-02"))
+		userID, journalDateOnly.Format("2006-01-02"))
 
 	var streakID int
 	var currentCount int
@@ -141,31 +150,32 @@ func UpdateStreakAfterPost(db *sql.DB, userID int, journalDate time.Time) {
 	newCount := 1
 
 	if lastDate != nil {
-		yesterday := lastDate.AddDate(0, 0, 1)
+		nextDay := lastDate.AddDate(0, 0, 1)
 
-		log.Printf("🔍 DEBUG: lastDate=%s, yesterday=%s, journalDate=%s",
+		log.Printf("🔍 DEBUG: lastDate=%s, nextDay=%s, journalDateOnly=%s",
 			lastDate.Format("2006-01-02"),
-			yesterday.Format("2006-01-02"),
-			journalDate.Format("2006-01-02"))
-		log.Printf("🔍 DEBUG: Equal check: %v, Before check: %v",
-			journalDate.Equal(yesterday),
-			journalDate.Before(*lastDate))
+			nextDay.Format("2006-01-02"),
+			journalDateOnly.Format("2006-01-02"))
+		log.Printf("🔍 DEBUG: Equal(lastDate)=%v, Before(lastDate)=%v, Equal(nextDay)=%v",
+			journalDateOnly.Equal(*lastDate),
+			journalDateOnly.Before(*lastDate),
+			journalDateOnly.Equal(nextDay))
 
 		switch {
-		case journalDate.Equal(*lastDate):
+		case journalDateOnly.Equal(*lastDate):
 			// Duplicate - ignore
 			log.Printf("⚠️ Duplicate journal_date %s, streak already counted",
-				journalDate.Format("2006-01-02"))
+				journalDateOnly.Format("2006-01-02"))
 			return
 
-		case journalDate.Before(*lastDate):
+		case journalDateOnly.Before(*lastDate):
 			// Out of order - posting for a date in the past
 			log.Printf("⚠️ Out-of-order journal_date %s < last_post_date %s, ignoring",
-				journalDate.Format("2006-01-02"),
+				journalDateOnly.Format("2006-01-02"),
 				lastDate.Format("2006-01-02"))
 			return
 
-		case journalDate.Equal(yesterday):
+		case journalDateOnly.Equal(nextDay):
 			// Consecutive day - increment
 			newCount = currentCount + 1
 			log.Printf("✅ Consecutive day! Incrementing streak: %d → %d",
@@ -176,7 +186,7 @@ func UpdateStreakAfterPost(db *sql.DB, userID int, journalDate time.Time) {
 			newCount = 1
 			log.Printf("⚠️ Gap detected. Resetting streak to 1 (last=%s, current=%s)",
 				lastDate.Format("2006-01-02"),
-				journalDate.Format("2006-01-02"))
+				journalDateOnly.Format("2006-01-02"))
 		}
 	}
 
@@ -207,7 +217,7 @@ func UpdateStreakAfterPost(db *sql.DB, userID int, journalDate time.Time) {
 	`,
 		newCount,
 		newLongestStreak,
-		journalDate,
+		journalDateOnly,
 		streakID,
 	)
 
