@@ -13,6 +13,7 @@ func CreateAuthenticationRoutes(db *sql.DB, router *mux.Router) *mux.Router {
 	router.HandleFunc("/logout", handlers.LogoutHandler(db)).Methods("POST")
 	router.HandleFunc("/verify-token", handlers.VerifyTokenHandler(db)).Methods("POST")
 	router.HandleFunc("/refresh-token", handlers.RefreshTokenHandler(db)).Methods("POST")
+	router.HandleFunc("/auth/google", handlers.GoogleSignInHandler(db)).Methods("POST")
 
 	return router
 }

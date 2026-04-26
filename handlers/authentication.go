@@ -10,6 +10,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v4"
 	"golang.org/x/crypto/bcrypt"
+	"google.golang.org/api/idtoken"
 	"masterboxer.com/project-micro-journal/models"
 )
 
@@ -33,8 +34,91 @@ func createRefreshToken(email string) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"email": email,
 		"exp":   time.Now().Add(7 * 24 * time.Hour).Unix(),
+		"jti":   fmt.Sprintf("%d", time.Now().UnixNano()),
 	})
 	return token.SignedString(refreshSecretKey)
+}
+
+func GoogleSignInHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			IDToken string `json:"id_token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		payload, err := idtoken.Validate(r.Context(), req.IDToken, "1056025366422-ek3d7gljf740ej7lbm3f9bu2ikdpl9at.apps.googleusercontent.com")
+		if err != nil {
+			http.Error(w, "Invalid Google token", http.StatusUnauthorized)
+			return
+		}
+
+		googleID := payload.Subject
+		email, _ := payload.Claims["email"].(string)
+		name, _ := payload.Claims["name"].(string)
+
+		var user models.User
+		err = db.QueryRow(
+			`SELECT id, username, display_name, email FROM users 
+             WHERE google_id = $1 OR email = $2`, googleID, email,
+		).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Email)
+
+		if err == sql.ErrNoRows {
+			isPrivate := true
+			err = db.QueryRow(
+				`INSERT INTO users (username, display_name, email, google_id, auth_provider, is_private, created_at)
+                 VALUES ($1, $2, $3, $4, 'google', $5, NOW()) RETURNING id`,
+				email, name, email, googleID, isPrivate,
+			).Scan(&user.ID)
+			if err != nil {
+				http.Error(w, "Failed to create user", http.StatusInternalServerError)
+				return
+			}
+			user.Email = email
+			user.Username = email
+			user.DisplayName = name
+		} else if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		} else {
+			_, _ = db.Exec(
+				`UPDATE users SET google_id = $1 WHERE id = $2 AND google_id IS NULL`,
+				googleID, user.ID,
+			)
+		}
+
+		accessToken, err := createAccessToken(user.Email)
+		if err != nil {
+			http.Error(w, "Could not create access token", http.StatusInternalServerError)
+			return
+		}
+		refreshToken, err := createRefreshToken(user.Email)
+		if err != nil {
+			http.Error(w, "Could not create refresh token", http.StatusInternalServerError)
+			return
+		}
+
+		expiresAt := time.Now().Add(7 * 24 * time.Hour)
+		_, err = db.Exec(`
+            INSERT INTO refresh_tokens (user_id, token, expires_at)
+            VALUES ($1, $2, $3)
+			ON CONFLICT (token) DO NOTHING`, user.ID, refreshToken, expiresAt)
+		if err != nil {
+			http.Error(w, "Could not save refresh token", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+			"user_id":       strconv.Itoa(user.ID),
+			"username":      user.Username,
+			"display_name":  user.DisplayName,
+		})
+	}
 }
 
 func VerifyTokenHandler(db *sql.DB) http.HandlerFunc {
@@ -84,6 +168,12 @@ func LoginHandler(db *sql.DB) http.HandlerFunc {
 		err := db.QueryRow(`SELECT id, username, display_name, email, password 
 			FROM users WHERE email = $1`, loginReq.Email).
 			Scan(&user.ID, &user.Username, &user.DisplayName, &user.Email, &user.Password)
+
+		if user.Password == "" {
+			http.Error(w, "This account uses Google Sign-In", http.StatusUnauthorized)
+			return
+		}
+
 		if err != nil {
 			http.Error(w, "Invalid email or password", http.StatusUnauthorized)
 			return
