@@ -17,7 +17,7 @@ import (
 func GetUsers(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query(`SELECT id, username, display_name, dob, 
-            gender, email, password, is_private, created_at FROM users`)
+            gender, email, COALESCE(password, ''), is_private, created_at FROM users`)
 		if err != nil {
 			http.Error(w, "Database query failed", http.StatusInternalServerError)
 			log.Println(err)
@@ -60,7 +60,7 @@ func GetUserById(db *sql.DB) http.HandlerFunc {
 
 		var u models.User
 		err := db.QueryRow(`SELECT id, username, display_name, dob, 
-            gender, email, password, is_private, created_at FROM users WHERE id = $1`, id).
+            gender, email, COALESCE(password, ''), is_private, created_at FROM users WHERE id = $1`, id).
 			Scan(&u.ID, &u.Username, &u.DisplayName, &u.DOB, &u.Gender, &u.Email,
 				&u.Password, &u.IsPrivate, &u.CreatedAt)
 		if err != nil {
@@ -215,9 +215,9 @@ func CreateUser(db *sql.DB) http.HandlerFunc {
 		}
 
 		err = db.QueryRow(
-			`INSERT INTO users (username, display_name, dob, gender, email, password, is_private, created_at) 
+			`INSERT INTO users (username, display_name, dob, gender, email, COALESCE(password, ''), is_private, created_at) 
             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) RETURNING id, created_at`,
-			u.Username, u.DisplayName, u.DOB, u.Gender, u.Email, string(hashedPassword), u.IsPrivate,
+			u.Username, u.DisplayName, u.DOB, u.Gender, u.Email, string(hashedPassword), isPrivate,
 		).Scan(&u.ID, &u.CreatedAt)
 
 		u.IsPrivate = &isPrivate
@@ -304,7 +304,7 @@ func UpdateUser(db *sql.DB) http.HandlerFunc {
 
 		var updatedUser models.User
 		err = db.QueryRow(`SELECT id, username, display_name, dob, 
-            gender, email, password, is_private, created_at FROM users WHERE id = $1`, id).
+            gender, email, COALESCE(password, ''), is_private, created_at FROM users WHERE id = $1`, id).
 			Scan(&updatedUser.ID, &updatedUser.Username, &updatedUser.DisplayName,
 				&updatedUser.DOB, &updatedUser.Gender, &updatedUser.Email,
 				&updatedUser.Password, &updatedUser.IsPrivate, &updatedUser.CreatedAt)
