@@ -208,11 +208,19 @@ func CreateUser(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		isPrivate := true
+
+		if u.IsPrivate != nil {
+			isPrivate = *u.IsPrivate
+		}
+
 		err = db.QueryRow(
 			`INSERT INTO users (username, display_name, dob, gender, email, password, is_private, created_at) 
             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) RETURNING id, created_at`,
 			u.Username, u.DisplayName, u.DOB, u.Gender, u.Email, string(hashedPassword), u.IsPrivate,
 		).Scan(&u.ID, &u.CreatedAt)
+
+		u.IsPrivate = &isPrivate
 
 		if err != nil {
 			http.Error(w, "Failed to create user", http.StatusInternalServerError)
