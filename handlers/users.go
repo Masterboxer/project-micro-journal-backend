@@ -215,7 +215,7 @@ func CreateUser(db *sql.DB) http.HandlerFunc {
 		}
 
 		err = db.QueryRow(
-			`INSERT INTO users (username, display_name, dob, gender, email, COALESCE(password, ''), is_private, created_at) 
+			`INSERT INTO users (username, display_name, dob, gender, email, password, is_private, created_at) 
             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) RETURNING id, created_at`,
 			u.Username, u.DisplayName, u.DOB, u.Gender, u.Email, string(hashedPassword), isPrivate,
 		).Scan(&u.ID, &u.CreatedAt)
