@@ -43,8 +43,8 @@ func SendStreakExpiryNotifications(db *sql.DB) {
 
 		localNow := nowUTC.In(loc)
 
-		// Only between 12:00 PM and 12:15 PM local time
-		if localNow.Hour() != 12 || localNow.Minute() > 15 {
+		// Only between 11:00 AM and 11:15 AM local time
+		if localNow.Hour() != 11 || localNow.Minute() > 15 {
 			continue
 		}
 
@@ -53,14 +53,20 @@ func SendStreakExpiryNotifications(db *sql.DB) {
 			continue
 		}
 
-		// If user already posted for today → streak safe
-		if !lastPostDate.Before(journalToday) {
+		lastPostDateOnly := time.Date(
+			lastPostDate.Year(),
+			lastPostDate.Month(),
+			lastPostDate.Day(),
+			0, 0, 0, 0,
+			time.UTC,
+		)
+
+		if !lastPostDateOnly.Before(journalToday) {
 			continue
 		}
 
-		// Streak should expire TODAY at noon
 		yesterday := journalToday.AddDate(0, 0, -1)
-		if !lastPostDate.Equal(yesterday) {
+		if !lastPostDateOnly.Equal(yesterday) {
 			continue
 		}
 
