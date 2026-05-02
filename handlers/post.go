@@ -263,7 +263,6 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 		}
 
 		if err != sql.ErrNoRows {
-			// A post already exists for this journal_date
 			http.Error(w, "You already posted for this day", http.StatusForbidden)
 			return
 		}
@@ -337,7 +336,6 @@ func UpdatePost(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Verify the post belongs to this user
 		var ownerID int
 		err = db.QueryRow(`SELECT user_id FROM posts WHERE id = $1`, postID).Scan(&ownerID)
 		if err == sql.ErrNoRows {
@@ -388,12 +386,10 @@ func ComputeJournalDate(nowUTC time.Time, timezone string) (time.Time, error) {
 
 	localTime := nowUTC.In(loc)
 
-	// If it's before noon, attribute to PREVIOUS day
 	if localTime.Hour() < 12 {
 		localTime = localTime.AddDate(0, 0, -1)
 	}
 
-	// Return date-only (no time components)
 	journalDate := time.Date(
 		localTime.Year(),
 		localTime.Month(),
@@ -778,14 +774,19 @@ func GetPostComments(db *sql.DB) http.HandlerFunc {
 		vars := mux.Vars(r)
 		postID := vars["postId"]
 
+		currentUserIDStr := r.URL.Query().Get("user_id")
+		currentUserID, _ := strconv.Atoi(currentUserIDStr)
+
 		rows, err := db.Query(`
             SELECT c.id, c.post_id, c.user_id, c.text, c.created_at,
-                   u.username, u.display_name
+                   u.username, u.display_name,
+                   COALESCE((SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id), 0) AS like_count,
+                   EXISTS(SELECT 1 FROM comment_likes WHERE comment_id = c.id AND user_id = $2) AS user_liked
             FROM comments c
             JOIN users u ON c.user_id = u.id
             WHERE c.post_id = $1
             ORDER BY c.created_at ASC`,
-			postID)
+			postID, currentUserID)
 
 		if err != nil {
 			http.Error(w, "Failed to fetch comments", http.StatusInternalServerError)
@@ -794,16 +795,36 @@ func GetPostComments(db *sql.DB) http.HandlerFunc {
 		}
 		defer rows.Close()
 
-		var comments []models.CommentWithUser
+		var comments []map[string]interface{}
 		for rows.Next() {
-			var c models.CommentWithUser
-			if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Text,
-				&c.CreatedAt, &c.Username, &c.DisplayName); err != nil {
+			var (
+				id          int
+				postIDInt   int
+				userID      int
+				text        string
+				createdAt   time.Time
+				username    string
+				displayName string
+				likeCount   int
+				userLiked   bool
+			)
+			if err := rows.Scan(&id, &postIDInt, &userID, &text, &createdAt,
+				&username, &displayName, &likeCount, &userLiked); err != nil {
 				http.Error(w, "Error scanning comments", http.StatusInternalServerError)
 				log.Println("GetPostComments scan error:", err)
 				return
 			}
-			comments = append(comments, c)
+			comments = append(comments, map[string]interface{}{
+				"id":           id,
+				"post_id":      postIDInt,
+				"user_id":      userID,
+				"text":         text,
+				"created_at":   createdAt.Format(time.RFC3339),
+				"username":     username,
+				"display_name": displayName,
+				"like_count":   likeCount,
+				"user_liked":   userLiked,
+			})
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -1026,4 +1047,57 @@ func notifyPostOwnerOfComment(db *sql.DB, postID int, commenterUserID int, comme
 
 	log.Printf("Sent comment notification for post %d: %d successful, %d failed",
 		postID, successCount, failureCount)
+}
+
+func LikeComment(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		commentIDStr := vars["commentId"]
+
+		commentID, err := strconv.Atoi(commentIDStr)
+		if err != nil {
+			http.Error(w, "Invalid comment ID", http.StatusBadRequest)
+			return
+		}
+
+		var req struct {
+			UserID int `json:"user_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		var likeID int
+		err = db.QueryRow(`
+			SELECT id FROM comment_likes
+			WHERE user_id = $1 AND comment_id = $2`,
+			req.UserID, commentID).Scan(&likeID)
+
+		if err == sql.ErrNoRows {
+			err = db.QueryRow(`
+				INSERT INTO comment_likes (user_id, comment_id)
+				VALUES ($1, $2)
+				RETURNING id`,
+				req.UserID, commentID).Scan(&likeID)
+			if err != nil {
+				http.Error(w, "Failed to like comment", http.StatusInternalServerError)
+				log.Println("LikeComment insert error:", err)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"liked": true})
+		} else if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		} else {
+			_, err = db.Exec(`DELETE FROM comment_likes WHERE id = $1`, likeID)
+			if err != nil {
+				http.Error(w, "Failed to unlike comment", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"liked": false})
+		}
+	}
 }

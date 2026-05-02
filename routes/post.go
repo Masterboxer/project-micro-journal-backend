@@ -19,6 +19,7 @@ func CreatePostRoutes(db *sql.DB, router *mux.Router) *mux.Router {
 	router.HandleFunc("/posts/{postId}/comments", handlers.CreateComment(db)).Methods("POST")
 	router.HandleFunc("/posts/{postId}/comments", handlers.GetPostComments(db)).Methods("GET")
 	router.HandleFunc("/comments/{commentId}", handlers.DeleteComment(db)).Methods("DELETE")
+	router.HandleFunc("/comments/{commentId}/like", handlers.LikeComment(db)).Methods("POST")
 
 	return router
 }
