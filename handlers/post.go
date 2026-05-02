@@ -308,6 +308,78 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 	}
 }
 
+func UpdatePost(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		postIDStr := vars["id"]
+
+		postID, err := strconv.Atoi(postIDStr)
+		if err != nil {
+			http.Error(w, "Invalid post ID", http.StatusBadRequest)
+			return
+		}
+
+		var req struct {
+			UserID int    `json:"user_id"`
+			Text   string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if req.Text == "" {
+			http.Error(w, "Text is required", http.StatusBadRequest)
+			return
+		}
+		if len(req.Text) > 280 {
+			http.Error(w, "Text must be at most 280 characters", http.StatusBadRequest)
+			return
+		}
+
+		// Verify the post belongs to this user
+		var ownerID int
+		err = db.QueryRow(`SELECT user_id FROM posts WHERE id = $1`, postID).Scan(&ownerID)
+		if err == sql.ErrNoRows {
+			http.Error(w, "Post not found", http.StatusNotFound)
+			return
+		} else if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+
+		if ownerID != req.UserID {
+			http.Error(w, "Unauthorized", http.StatusForbidden)
+			return
+		}
+
+		var updatedPost models.Post
+		err = db.QueryRow(`
+			UPDATE posts
+			SET text = $1, updated_at = NOW()
+			WHERE id = $2
+			RETURNING id, user_id, template_id, text, photo_path, created_at, journal_date`,
+			req.Text, postID,
+		).Scan(
+			&updatedPost.ID,
+			&updatedPost.UserID,
+			&updatedPost.TemplateID,
+			&updatedPost.Text,
+			&updatedPost.PhotoPath,
+			&updatedPost.CreatedAt,
+			&updatedPost.JournalDate,
+		)
+		if err != nil {
+			http.Error(w, "Failed to update post", http.StatusInternalServerError)
+			log.Println("UpdatePost error:", err)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(updatedPost)
+	}
+}
+
 func ComputeJournalDate(nowUTC time.Time, timezone string) (time.Time, error) {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
