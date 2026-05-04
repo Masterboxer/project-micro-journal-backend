@@ -221,8 +221,8 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		if len(p.Text) > 280 {
-			http.Error(w, "Text must be at most 280 characters", http.StatusBadRequest)
+		if len(p.Text) > 500 {
+			http.Error(w, "Text must be at most 500 characters", http.StatusBadRequest)
 			return
 		}
 
@@ -331,8 +331,8 @@ func UpdatePost(db *sql.DB) http.HandlerFunc {
 			http.Error(w, "Text is required", http.StatusBadRequest)
 			return
 		}
-		if len(req.Text) > 280 {
-			http.Error(w, "Text must be at most 280 characters", http.StatusBadRequest)
+		if len(req.Text) > 500 {
+			http.Error(w, "Text must be at most 500 characters", http.StatusBadRequest)
 			return
 		}
 
