@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/api/idtoken"
 	"masterboxer.com/project-micro-journal/models"
+	"masterboxer.com/project-micro-journal/services"
 )
 
 type LoginRequest struct {
@@ -66,7 +69,6 @@ func GoogleSignInHandler(db *sql.DB) http.HandlerFunc {
              WHERE google_id = $1 OR email = $2`, googleID, email,
 		).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Email)
 
-		// Existing user
 		if err == nil {
 			_, _ = db.Exec(
 				`UPDATE users SET google_id = $1 WHERE id = $2 AND google_id IS NULL`,
@@ -95,7 +97,6 @@ func GoogleSignInHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// New user
 		if err == sql.ErrNoRows {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
@@ -127,13 +128,11 @@ func CompleteGoogleSignUp(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Validate required fields
 		if req.Username == "" || req.DOB == "" || req.Gender == "" {
 			http.Error(w, "Username, date of birth, and gender are required", http.StatusBadRequest)
 			return
 		}
 
-		// Check username isn't taken
 		var exists int
 		db.QueryRow("SELECT COUNT(*) FROM users WHERE username = $1", req.Username).Scan(&exists)
 		if exists > 0 {
@@ -370,4 +369,65 @@ func LogoutHandler(db *sql.DB) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Logged out successfully"))
 	}
+}
+
+func ForgotPasswordHandler(db *sql.DB, mailSvc *services.MailService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Email string `json:"email"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if req.Email == "" {
+			http.Error(w, "Email is required", http.StatusBadRequest)
+			return
+		}
+
+		var userID int
+		err := db.QueryRow(`SELECT id FROM users WHERE email = $1`, req.Email).Scan(&userID)
+
+		if err == sql.ErrNoRows {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("If the email exists, a reset link has been sent"))
+			return
+		}
+
+		if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+
+		token := generateSecureToken()
+
+		expiresAt := time.Now().Add(15 * time.Minute)
+
+		_, err = db.Exec(`
+			INSERT INTO password_resets (user_id, token, expires_at)
+			VALUES ($1, $2, $3)
+		`, userID, token, expiresAt)
+
+		if err != nil {
+			http.Error(w, "Failed to store reset token: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		err = mailSvc.SendPasswordResetEmail(req.Email, token)
+		if err != nil {
+			http.Error(w, "Failed to send email", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("If the email exists, a reset link has been sent"))
+	}
+}
+
+func generateSecureToken() string {
+	bytes := make([]byte, 32)
+	rand.Read(bytes)
+	return hex.EncodeToString(bytes)
 }

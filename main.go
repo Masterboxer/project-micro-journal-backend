@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/gorilla/mux"
 	"masterboxer.com/project-micro-journal/database"
@@ -21,10 +22,23 @@ func main() {
 		log.Printf("Warning: Firebase initialization failed: %v", err)
 	}
 
+	cfg := services.Config{
+		Host:     os.Getenv("SMTP_HOST"),
+		Port:     587,
+		Username: os.Getenv("SMTP_USER"),
+		Password: os.Getenv("SMTP_PASS"),
+		From:     os.Getenv("SMTP_FROM"),
+	}
+
+	mailSvc, err := services.NewMailService(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	router := mux.NewRouter()
 
 	routes.CreateUserRoutes(db, router)
-	routes.CreateAuthenticationRoutes(db, router)
+	routes.CreateAuthenticationRoutes(db, mailSvc, router)
 	routes.CreatePostRoutes(db, router)
 	routes.CreateTemplateRoutes(db, router)
 	routes.CreateNotificationRoutes(db, router)
