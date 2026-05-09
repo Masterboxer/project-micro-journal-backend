@@ -17,6 +17,8 @@ func CreateAuthenticationRoutes(db *sql.DB, mailSvc *services.MailService, route
 	router.HandleFunc("/auth/google", handlers.GoogleSignInHandler(db)).Methods("POST")
 	router.HandleFunc("/auth/google/complete", handlers.CompleteGoogleSignUp(db)).Methods("POST")
 	router.HandleFunc("/forgot-password", handlers.ForgotPasswordHandler(db, mailSvc)).Methods("POST")
+	router.HandleFunc("/validate-reset-token", handlers.ValidateResetTokenHandler(db)).Methods("POST")
+	router.HandleFunc("/reset-password", handlers.ResetPasswordHandler(db)).Methods("POST")
 
 	return router
 }

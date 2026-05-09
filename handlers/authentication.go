@@ -431,3 +431,117 @@ func generateSecureToken() string {
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)
 }
+
+func ValidateResetTokenHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := r.URL.Query().Get("token")
+		if token == "" {
+			http.Error(w, "Missing token", http.StatusBadRequest)
+			return
+		}
+
+		var expiresAt time.Time
+		var used bool
+		err := db.QueryRow(`
+			SELECT expires_at, used FROM password_resets 
+			WHERE token = $1`, token).Scan(&expiresAt, &used)
+
+		if err == sql.ErrNoRows {
+			http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
+			return
+		}
+		if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+		if used {
+			http.Error(w, "Token has already been used", http.StatusUnauthorized)
+			return
+		}
+		if time.Now().After(expiresAt) {
+			http.Error(w, "Token has expired", http.StatusUnauthorized)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Token is valid"))
+	}
+}
+
+func ResetPasswordHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Token       string `json:"token"`
+			NewPassword string `json:"new_password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.Token == "" || req.NewPassword == "" {
+			http.Error(w, "Token and new password are required", http.StatusBadRequest)
+			return
+		}
+		if len(req.NewPassword) < 8 {
+			http.Error(w, "Password must be at least 8 characters", http.StatusBadRequest)
+			return
+		}
+
+		var userID int
+		var expiresAt time.Time
+		var used bool
+		err := db.QueryRow(`
+			SELECT user_id, expires_at, used FROM password_resets 
+			WHERE token = $1`, req.Token).Scan(&userID, &expiresAt, &used)
+
+		if err == sql.ErrNoRows {
+			http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
+			return
+		}
+		if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+		if used {
+			http.Error(w, "Token has already been used", http.StatusUnauthorized)
+			return
+		}
+		if time.Now().After(expiresAt) {
+			http.Error(w, "Token has expired", http.StatusUnauthorized)
+			return
+		}
+
+		hashed, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+			return
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		_, err = tx.Exec(`UPDATE users SET password = $1 WHERE id = $2`, string(hashed), userID)
+		if err != nil {
+			http.Error(w, "Failed to update password", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = tx.Exec(`UPDATE password_resets SET used = true WHERE token = $1`, req.Token)
+		if err != nil {
+			http.Error(w, "Failed to invalidate token", http.StatusInternalServerError)
+			return
+		}
+
+		if err = tx.Commit(); err != nil {
+			http.Error(w, "Failed to commit changes", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Password reset successfully"))
+	}
+}

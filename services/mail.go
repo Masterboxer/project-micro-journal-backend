@@ -62,7 +62,7 @@ func (m *MailService) SendMail(to, subject, textBody, htmlBody string) error {
 }
 
 func (m *MailService) SendVerificationEmail(to, token string) error {
-	link := fmt.Sprintf("https://yourapp.com/verify?token=%s", token)
+	link := fmt.Sprintf("https://reflecto.co.in/verify?token=%s", token)
 
 	textBody := fmt.Sprintf(`
 Welcome to MyApp!
@@ -95,7 +95,7 @@ If you didn't sign up, ignore this.
 }
 
 func (m *MailService) SendPasswordResetEmail(to, token string) error {
-	link := fmt.Sprintf("https://yourapp.com/reset-password?token=%s", token)
+	link := fmt.Sprintf("https://reflecto.co.in/forgot-password?token=%s", token)
 
 	textBody := fmt.Sprintf(`
 Reset your password:
