@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>Verify your email — Reflecto</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap");
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        background-color: #f2f5fc;
+        font-family: "DM Sans", Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        color: #0d0f14;
+      }
+
+      .email-wrapper {
+        width: 100%;
+        background-color: #f2f5fc;
+        padding: 48px 16px;
+      }
+
+      .email-container {
+        max-width: 560px;
+        margin: 0 auto;
+      }
+
+      /* Header */
+      .email-header {
+        text-align: center;
+        margin-bottom: 28px;
+      }
+
+      .logo-dot {
+        width: 32px;
+        height: 32px;
+        border-radius: 9px;
+        background: linear-gradient(135deg, #4b8ef8, #6b5ffb);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 15px;
+        color: white;
+        vertical-align: middle;
+      }
+
+      .logo-text {
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 22px;
+        font-style: italic;
+        color: #0d0f14;
+        vertical-align: middle;
+        margin-left: 10px;
+      }
+
+      /* Card */
+      .email-card {
+        background: #ffffff;
+        border-radius: 24px;
+        border: 1px solid rgba(0, 0, 0, 0.07);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.07);
+        overflow: hidden;
+      }
+
+      /* Top accent — green for verify */
+      .card-accent {
+        height: 4px;
+        background: linear-gradient(90deg, #10b981, #4b8ef8, #10b981);
+      }
+
+      .card-body {
+        padding: 44px 48px 40px;
+      }
+
+      /* Icon */
+      .icon-badge {
+        width: 60px;
+        height: 60px;
+        border-radius: 18px;
+        background: rgba(16, 185, 129, 0.1);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 26px;
+        margin-bottom: 24px;
+      }
+
+      /* Typography */
+      .email-title {
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 28px;
+        font-style: italic;
+        line-height: 1.2;
+        color: #0d0f14;
+        margin-bottom: 12px;
+      }
+
+      .email-title span {
+        color: #10b981;
+      }
+
+      .email-body {
+        font-size: 15px;
+        font-weight: 300;
+        color: #3a3d47;
+        line-height: 1.7;
+        margin-bottom: 32px;
+      }
+
+      /* What to expect list */
+      .feature-list {
+        list-style: none;
+        margin-bottom: 32px;
+      }
+
+      .feature-list li {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        font-size: 14px;
+        font-weight: 300;
+        color: #3a3d47;
+        line-height: 1.6;
+        margin-bottom: 12px;
+      }
+
+      .feature-list li:last-child {
+        margin-bottom: 0;
+      }
+
+      .feature-dot {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: rgba(16, 185, 129, 0.1);
+        color: #10b981;
+        font-size: 11px;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        margin-top: 1px;
+      }
+
+      /* CTA Button */
+      .btn-wrap {
+        text-align: center;
+        margin-bottom: 28px;
+      }
+
+      .btn-primary {
+        display: inline-block;
+        background: linear-gradient(135deg, #10b981, #4b8ef8);
+        color: #ffffff !important;
+        text-decoration: none;
+        border-radius: 50px;
+        padding: 16px 44px;
+        font-size: 16px;
+        font-weight: 500;
+        font-family: "DM Sans", Arial, sans-serif;
+        letter-spacing: 0.01em;
+        box-shadow: 0 8px 32px rgba(16, 185, 129, 0.28);
+      }
+
+      /* Fallback link */
+      .fallback-wrap {
+        background: #fafbff;
+        border: 1px solid rgba(0, 0, 0, 0.07);
+        border-radius: 14px;
+        padding: 16px 20px;
+        margin-bottom: 32px;
+      }
+
+      .fallback-label {
+        font-size: 12px;
+        font-weight: 500;
+        color: #8a8d99;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 8px;
+      }
+
+      .fallback-link {
+        font-size: 12px;
+        color: #4b8ef8;
+        word-break: break-all;
+        line-height: 1.5;
+        text-decoration: none;
+      }
+
+      /* Divider */
+      .divider {
+        height: 1px;
+        background: rgba(0, 0, 0, 0.06);
+        margin: 28px 0;
+      }
+
+      /* Security note */
+      .security-note {
+        font-size: 13px;
+        font-weight: 300;
+        color: #8a8d99;
+        line-height: 1.6;
+      }
+
+      .security-note strong {
+        color: #3a3d47;
+        font-weight: 500;
+      }
+
+      /* Footer */
+      .email-footer {
+        background: #0d0f14;
+        border-radius: 0 0 24px 24px;
+        padding: 28px 48px;
+        text-align: center;
+      }
+
+      .footer-logo {
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 18px;
+        font-style: italic;
+        color: rgba(255, 255, 255, 0.7);
+        margin-bottom: 14px;
+      }
+
+      .footer-links {
+        margin-bottom: 16px;
+      }
+
+      .footer-links a {
+        color: rgba(255, 255, 255, 0.4);
+        text-decoration: none;
+        font-size: 12px;
+        margin: 0 10px;
+      }
+
+      .footer-copy {
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.25);
+        font-weight: 300;
+      }
+
+      /* Below card note */
+      .below-card {
+        text-align: center;
+        margin-top: 24px;
+        font-size: 13px;
+        font-weight: 300;
+        color: #8a8d99;
+      }
+
+      @media (max-width: 600px) {
+        .card-body {
+          padding: 32px 28px 28px;
+        }
+        .email-footer {
+          padding: 24px 28px;
+        }
+        .email-title {
+          font-size: 24px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="email-wrapper">
+      <div class="email-container">
+        <!-- Header / Logo -->
+        <div class="email-header">
+          <span class="logo-dot">✦</span>
+          <span class="logo-text">Reflecto</span>
+        </div>
+
+        <!-- Card -->
+        <div class="email-card">
+          <div class="card-accent"></div>
+
+          <div class="card-body">
+            <div class="icon-badge">✉️</div>
+
+            <h1 class="email-title">Verify your<br /><span>email.</span></h1>
+
+            <p class="email-body">
+              Welcome to Reflecto — we're glad you're here. Before you start
+              journaling, just tap the button below to confirm your email
+              address and activate your account.
+            </p>
+
+            <ul class="feature-list">
+              <li>
+                <span class="feature-dot">✓</span>
+                Your reflections are private and encrypted, visible only to you.
+              </li>
+              <li>
+                <span class="feature-dot">✓</span>
+                Write daily micro-journals in seconds, build a habit that
+                sticks.
+              </li>
+              <li>
+                <span class="feature-dot">✓</span>
+                Look back on how far you've come — insights from your own words.
+              </li>
+            </ul>
+
+            <div class="btn-wrap">
+              <a href="%s" class="btn-primary">Verify my email →</a>
+            </div>
+
+            <div class="fallback-wrap">
+              <div class="fallback-label">
+                Or copy this link into your browser
+              </div>
+              <a href="%s" class="fallback-link">%s</a>
+            </div>
+
+            <div class="divider"></div>
+
+            <p class="security-note">
+              <strong>Didn't create an account?</strong> You can safely ignore
+              this email — no account will be created without verification.
+              Questions?
+              <a
+                href="mailto:support@reflecto.co.in"
+                style="color: #4b8ef8; text-decoration: none"
+                >We're here to help.</a
+              >
+            </p>
+          </div>
+
+          <!-- Footer inside card -->
+          <div class="email-footer">
+            <div class="footer-logo">✦ Reflecto</div>
+            <div class="footer-links">
+              <a href="https://reflecto.co.in/privacy">Privacy</a>
+              <a href="mailto:support@reflecto.co.in">Contact</a>
+              <a href="https://reflecto.co.in">App</a>
+            </div>
+            <div class="footer-copy">© 2026 Reflecto. Made with intention.</div>
+          </div>
+        </div>
+
+        <p class="below-card">
+          This email was sent because you signed up for Reflecto.
+        </p>
+      </div>
+    </div>
+  </body>
+</html>
