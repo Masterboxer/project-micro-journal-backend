@@ -401,23 +401,29 @@ func ForgotPasswordHandler(db *sql.DB, mailSvc *services.MailService) http.Handl
 			return
 		}
 
-		token := generateSecureToken()
+		_, err = db.Exec(`DELETE FROM password_resets WHERE user_id = $1`, userID)
+		if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
 
+		token := generateSecureToken()
 		expiresAt := time.Now().Add(15 * time.Minute)
+
+		err = mailSvc.SendPasswordResetEmail(req.Email, token)
+		if err != nil {
+			fmt.Printf("[ForgotPassword] Failed to send reset email to %s: %v\n", req.Email, err)
+			http.Error(w, "Failed to send email", http.StatusInternalServerError)
+			return
+		}
 
 		_, err = db.Exec(`
 			INSERT INTO password_resets (user_id, token, expires_at)
 			VALUES ($1, $2, $3)
 		`, userID, token, expiresAt)
-
 		if err != nil {
-			http.Error(w, "Failed to store reset token: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		err = mailSvc.SendPasswordResetEmail(req.Email, token)
-		if err != nil {
-			http.Error(w, "Failed to send email", http.StatusInternalServerError)
+			fmt.Printf("[ForgotPassword] Failed to store reset token for user %d: %v\n", userID, err)
+			http.Error(w, "Failed to store reset token", http.StatusInternalServerError)
 			return
 		}
 

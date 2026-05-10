@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/wneessen/go-mail"
 )
@@ -27,6 +28,7 @@ func NewMailService(cfg Config) (*MailService, error) {
 		mail.WithSMTPAuth(mail.SMTPAuthAutoDiscover),
 		mail.WithUsername(cfg.Username),
 		mail.WithPassword(cfg.Password),
+		mail.WithTLSPolicy(mail.TLSMandatory),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create mail client: %w", err)
@@ -40,26 +42,19 @@ func NewMailService(cfg Config) (*MailService, error) {
 
 func (m *MailService) SendMail(to, subject, textBody, htmlBody string) error {
 	msg := mail.NewMsg()
-
 	if err := msg.From(m.from); err != nil {
 		return err
 	}
-
 	if err := msg.To(to); err != nil {
 		return err
 	}
-
 	msg.Subject(subject)
-
 	msg.SetBodyString(mail.TypeTextPlain, textBody)
-
 	msg.AddAlternativeString(mail.TypeTextHTML, htmlBody)
 
-	if err := m.client.DialAndSend(msg); err != nil {
-		return err
-	}
+	fmt.Printf("[MailDebug] Sending to: %s | HTML length: %d bytes\n", to, len(htmlBody))
 
-	return nil
+	return m.client.DialAndSend(msg)
 }
 
 func (m *MailService) SendPasswordResetEmail(to, token string) error {
@@ -69,10 +64,10 @@ func (m *MailService) SendPasswordResetEmail(to, token string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read template: %w", err)
 	}
-	// %s appears 3 times: href, href, display text
-	htmlBody := fmt.Sprintf(string(htmlBytes), link, link, link)
 
+	htmlBody := strings.ReplaceAll(string(htmlBytes), "{{RESET_LINK}}", link)
 	textBody := fmt.Sprintf("Reset your Reflecto password:\n%s\n\nExpires in 15 minutes.", link)
+
 	return m.SendMail(to, "Reset your password — Reflecto", textBody, htmlBody)
 }
 
@@ -83,9 +78,9 @@ func (m *MailService) SendVerificationEmail(to, token string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read template: %w", err)
 	}
-	// %s appears 3 times: href, href, display text
-	htmlBody := fmt.Sprintf(string(htmlBytes), link, link, link)
 
+	htmlBody := strings.ReplaceAll(string(htmlBytes), "{{VERIFY_LINK}}", link)
 	textBody := fmt.Sprintf("Welcome to Reflecto! Verify your email:\n%s", link)
+
 	return m.SendMail(to, "Verify your email — Reflecto", textBody, htmlBody)
 }
