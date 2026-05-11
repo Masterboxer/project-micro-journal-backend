@@ -50,6 +50,27 @@ func FollowUser(db *sql.DB) http.HandlerFunc {
 
 		log.Printf("Following user %d (private: %v)", req.FollowingID, isPrivate)
 
+		var followerFollowingCount, targetFollowersCount int
+		err = db.QueryRow(`
+			SELECT
+				(SELECT COUNT(*) FROM followers WHERE follower_id = $1 AND status = 'accepted'),
+				(SELECT COUNT(*) FROM followers WHERE following_id = $2 AND status = 'accepted')`,
+			followerID, req.FollowingID).Scan(&followerFollowingCount, &targetFollowersCount)
+		if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			log.Printf("Error checking follow limits: %v", err)
+			return
+		}
+
+		if followerFollowingCount >= 10 {
+			http.Error(w, "You have reached the maximum following limit of 10 users", http.StatusForbidden)
+			return
+		}
+		if targetFollowersCount >= 10 {
+			http.Error(w, "This user has reached the maximum follower limit of 10", http.StatusForbidden)
+			return
+		}
+
 		var existingStatus string
 		err = db.QueryRow(`
 			SELECT status FROM followers 

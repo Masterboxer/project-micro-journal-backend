@@ -70,7 +70,7 @@ func (m *MailService) SendPasswordResetEmail(to, token string) error {
 }
 
 func (m *MailService) SendVerificationEmail(to, token string) error {
-	link := fmt.Sprintf("https://reflecto.co.in/verify?token=%s", token)
+	link := fmt.Sprintf("https://reflecto.co.in/verify-email?token=%s", token)
 
 	htmlBytes, err := os.ReadFile("templates/verify-email.html")
 	if err != nil {
