@@ -24,31 +24,11 @@ func SendVerificationEmailHandler(db *sql.DB, mailSvc *services.MailService) htt
 			http.Error(w, "user_id and email are required", http.StatusBadRequest)
 			return
 		}
-
-		_, err := db.Exec(`DELETE FROM email_verifications WHERE user_id = $1`, req.UserID)
-		if err != nil {
-			http.Error(w, "Failed to clear old verification tokens", http.StatusInternalServerError)
-			return
-		}
-
-		token := generateSecureToken()
-		expiresAt := time.Now().Add(24 * time.Hour)
-
-		_, err = db.Exec(`
-			INSERT INTO email_verifications (user_id, token, expires_at)
-			VALUES ($1, $2, $3)
-		`, req.UserID, token, expiresAt)
-		if err != nil {
-			http.Error(w, "Failed to store verification token", http.StatusInternalServerError)
-			return
-		}
-
-		if err := mailSvc.SendVerificationEmail(req.Email, token); err != nil {
+		if err := sendVerificationEmail(db, mailSvc, req.UserID, req.Email); err != nil {
 			fmt.Printf("[SendVerification] Failed for %s: %v\n", req.Email, err)
 			http.Error(w, "Failed to send verification email", http.StatusInternalServerError)
 			return
 		}
-
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Verification email sent"))
 	}
@@ -154,7 +134,7 @@ func ResendVerificationEmailHandler(db *sql.DB, mailSvc *services.MailService) h
 			return
 		}
 
-		if err := SendVerificationEmailHandler(db, mailSvc); err != nil {
+		if err := sendVerificationEmail(db, mailSvc, userID, req.Email); err != nil {
 			fmt.Printf("[ResendVerification] Failed for %s: %v\n", req.Email, err)
 			http.Error(w, "Failed to send verification email", http.StatusInternalServerError)
 			return
@@ -163,4 +143,21 @@ func ResendVerificationEmailHandler(db *sql.DB, mailSvc *services.MailService) h
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("If the email exists and is unverified, a new link has been sent"))
 	}
+}
+
+func sendVerificationEmail(db *sql.DB, mailSvc *services.MailService, userID int, email string) error {
+	_, err := db.Exec(`DELETE FROM email_verifications WHERE user_id = $1`, userID)
+	if err != nil {
+		return fmt.Errorf("failed to clear old tokens: %w", err)
+	}
+	token := generateSecureToken()
+	expiresAt := time.Now().Add(24 * time.Hour)
+	_, err = db.Exec(`
+		INSERT INTO email_verifications (user_id, token, expires_at)
+		VALUES ($1, $2, $3)
+	`, userID, token, expiresAt)
+	if err != nil {
+		return fmt.Errorf("failed to store token: %w", err)
+	}
+	return mailSvc.SendVerificationEmail(email, token)
 }
