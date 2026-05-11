@@ -40,6 +40,7 @@ func main() {
 	routes.CreateUserRoutes(db, router)
 	routes.CreateAuthenticationRoutes(db, mailSvc, router)
 	routes.CreatePostRoutes(db, router)
+	routes.CreateMailVerificationRoutes(db, mailSvc, router)
 	routes.CreateTemplateRoutes(db, router)
 	routes.CreateNotificationRoutes(db, router)
 

@@ -52,8 +52,6 @@ func (m *MailService) SendMail(to, subject, textBody, htmlBody string) error {
 	msg.SetBodyString(mail.TypeTextPlain, textBody)
 	msg.AddAlternativeString(mail.TypeTextHTML, htmlBody)
 
-	fmt.Printf("[MailDebug] Sending to: %s | HTML length: %d bytes\n", to, len(htmlBody))
-
 	return m.client.DialAndSend(msg)
 }
 
