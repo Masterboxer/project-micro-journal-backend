@@ -59,10 +59,13 @@ func GetUserById(db *sql.DB) http.HandlerFunc {
 		}
 
 		var u models.User
+		var emailVerified bool
+
 		err := db.QueryRow(`SELECT id, username, display_name, dob, 
-            gender, email, COALESCE(password, ''), is_private, created_at FROM users WHERE id = $1`, id).
+			gender, email, COALESCE(password, ''), is_private, created_at, 
+			COALESCE(email_verified, false) FROM users WHERE id = $1`, id).
 			Scan(&u.ID, &u.Username, &u.DisplayName, &u.DOB, &u.Gender, &u.Email,
-				&u.Password, &u.IsPrivate, &u.CreatedAt)
+				&u.Password, &u.IsPrivate, &u.CreatedAt, &emailVerified)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				http.Error(w, "User not found", http.StatusNotFound)
@@ -78,6 +81,7 @@ func GetUserById(db *sql.DB) http.HandlerFunc {
 		type UserWithStats struct {
 			models.User
 			FollowersCount       int    `json:"followers_count"`
+			EmailVerified        bool   `json:"email_verified"`
 			FollowingCount       int    `json:"following_count"`
 			PendingRequestsCount int    `json:"pending_requests_count,omitempty"`
 			IsFollowing          *bool  `json:"is_following,omitempty"`
@@ -87,7 +91,7 @@ func GetUserById(db *sql.DB) http.HandlerFunc {
 			FollowStatus         string `json:"follow_status,omitempty"`
 		}
 
-		userWithStats := UserWithStats{User: u}
+		userWithStats := UserWithStats{User: u, EmailVerified: emailVerified}
 
 		err = db.QueryRow(`
 			SELECT 

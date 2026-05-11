@@ -274,6 +274,7 @@ func LoginHandler(db *sql.DB) http.HandlerFunc {
 			"user_id":       strconv.Itoa(user.ID),
 			"username":      user.Username,
 			"display_name":  user.DisplayName,
+			"email":         user.Email,
 		})
 	}
 }
