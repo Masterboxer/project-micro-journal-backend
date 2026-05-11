@@ -24,6 +24,24 @@ func SendVerificationEmailHandler(db *sql.DB, mailSvc *services.MailService) htt
 			http.Error(w, "user_id and email are required", http.StatusBadRequest)
 			return
 		}
+
+		var alreadyVerified bool
+		err := db.QueryRow(`
+			SELECT COALESCE(email_verified, false) FROM users WHERE id = $1
+		`, req.UserID).Scan(&alreadyVerified)
+		if err == sql.ErrNoRows {
+			http.Error(w, "User not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+		if alreadyVerified {
+			http.Error(w, "Email is already verified", http.StatusConflict)
+			return
+		}
+
 		if err := sendVerificationEmail(db, mailSvc, req.UserID, req.Email); err != nil {
 			fmt.Printf("[SendVerification] Failed for %s: %v\n", req.Email, err)
 			http.Error(w, "Failed to send verification email", http.StatusInternalServerError)
