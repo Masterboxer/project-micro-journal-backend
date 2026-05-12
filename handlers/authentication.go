@@ -71,7 +71,7 @@ func GoogleSignInHandler(db *sql.DB) http.HandlerFunc {
 
 		if err == nil {
 			_, _ = db.Exec(
-				`UPDATE users SET google_id = $1 WHERE id = $2 AND google_id IS NULL`,
+				`UPDATE users SET google_id = $1, email_verified = true WHERE id = $2`,
 				googleID, user.ID,
 			)
 			accessToken, _ := createAccessToken(user.Email)
@@ -93,6 +93,7 @@ func GoogleSignInHandler(db *sql.DB) http.HandlerFunc {
 				"user_id":          strconv.Itoa(user.ID),
 				"username":         user.Username,
 				"display_name":     user.DisplayName,
+				"email":            user.Email,
 			})
 			return
 		}
@@ -153,8 +154,8 @@ func CompleteGoogleSignUp(db *sql.DB) http.HandlerFunc {
 		isPrivate := true
 		var userID int
 		err = db.QueryRow(
-			`INSERT INTO users (username, display_name, email, google_id, auth_provider, dob, gender, is_private, created_at)
-             VALUES ($1, $2, $3, $4, 'google', $5, $6, $7, NOW()) RETURNING id`,
+			`INSERT INTO users (username, display_name, email, google_id, auth_provider, dob, gender, is_private, email_verified, created_at)
+			VALUES ($1, $2, $3, $4, 'google', $5, $6, $7, true, NOW()) RETURNING id`,
 			req.Username, req.DisplayName, req.Email, req.GoogleID, dob, req.Gender, isPrivate,
 		).Scan(&userID)
 		if err != nil {
@@ -178,6 +179,7 @@ func CompleteGoogleSignUp(db *sql.DB) http.HandlerFunc {
 			"user_id":          strconv.Itoa(userID),
 			"username":         req.Username,
 			"display_name":     req.DisplayName,
+			"email":            req.Email,
 		})
 	}
 }
