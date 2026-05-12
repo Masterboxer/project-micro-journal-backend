@@ -17,7 +17,7 @@ import (
 func GetUsers(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query(`SELECT id, username, display_name, dob, 
-            gender, email, COALESCE(password, ''), is_private, created_at FROM users`)
+            gender, email, COALESCE(password, ''), COALESCE(is_private, true), created_at FROM users`)
 		if err != nil {
 			http.Error(w, "Database query failed", http.StatusInternalServerError)
 			log.Println(err)
@@ -308,7 +308,7 @@ func UpdateUser(db *sql.DB) http.HandlerFunc {
 
 		var updatedUser models.User
 		err = db.QueryRow(`SELECT id, username, display_name, dob, 
-            gender, email, COALESCE(password, ''), is_private, created_at FROM users WHERE id = $1`, id).
+            gender, email, COALESCE(password, ''), COALESCE(is_private, true), created_at FROM users WHERE id = $1`, id).
 			Scan(&updatedUser.ID, &updatedUser.Username, &updatedUser.DisplayName,
 				&updatedUser.DOB, &updatedUser.Gender, &updatedUser.Email,
 				&updatedUser.Password, &updatedUser.IsPrivate, &updatedUser.CreatedAt)
