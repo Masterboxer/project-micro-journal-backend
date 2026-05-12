@@ -64,17 +64,6 @@ func VerifyEmailHandler(db *sql.DB) http.HandlerFunc {
 		var expiresAt time.Time
 		var used bool
 
-		if used {
-			var alreadyVerified bool
-			db.QueryRow(`SELECT COALESCE(email_verified, false) FROM users WHERE id = $1`, userID).Scan(&alreadyVerified)
-			if alreadyVerified {
-				http.Error(w, "Email already verified", http.StatusConflict)
-				return
-			}
-			http.Error(w, "Token has already been used", http.StatusUnauthorized)
-			return
-		}
-
 		err := db.QueryRow(`
 			SELECT user_id, expires_at, used
 			FROM email_verifications
@@ -89,10 +78,21 @@ func VerifyEmailHandler(db *sql.DB) http.HandlerFunc {
 			http.Error(w, "Database error", http.StatusInternalServerError)
 			return
 		}
+
 		if used {
+			var alreadyVerified bool
+			db.QueryRow(`
+				SELECT COALESCE(email_verified, false) FROM users WHERE id = $1
+			`, userID).Scan(&alreadyVerified)
+
+			if alreadyVerified {
+				http.Error(w, "Email already verified", http.StatusConflict)
+				return
+			}
 			http.Error(w, "Token has already been used", http.StatusUnauthorized)
 			return
 		}
+
 		if time.Now().After(expiresAt) {
 			http.Error(w, "Token has expired", http.StatusUnauthorized)
 			return
