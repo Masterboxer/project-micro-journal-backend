@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"masterboxer.com/project-micro-journal/constants"
 	"masterboxer.com/project-micro-journal/models"
 	"masterboxer.com/project-micro-journal/services"
 )
@@ -581,10 +582,7 @@ func AddReaction(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		validReactions := map[string]bool{
-			"heart": true, "laugh": true, "sad": true, "angry": true, "surprised": true,
-		}
-		if !validReactions[req.ReactionType] {
+		if _, exists := constants.ReactionEmojis[req.ReactionType]; !exists {
 			http.Error(w, "Invalid reaction type", http.StatusBadRequest)
 			return
 		}
@@ -597,18 +595,27 @@ func AddReaction(db *sql.DB) http.HandlerFunc {
 
 		var existingReactionID int
 		var existingReactionType string
+
 		err = db.QueryRow(`
-            SELECT id, reaction_type FROM reactions 
+            SELECT id, reaction_type
+            FROM reactions
             WHERE user_id = $1 AND post_id = $2`,
-			req.UserID, postID).Scan(&existingReactionID, &existingReactionType)
+			req.UserID,
+			postID,
+		).Scan(&existingReactionID, &existingReactionType)
 
 		if err == sql.ErrNoRows {
+
 			var reactionID int
+
 			err = db.QueryRow(`
                 INSERT INTO reactions (user_id, post_id, reaction_type)
                 VALUES ($1, $2, $3)
                 RETURNING id`,
-				req.UserID, postID, req.ReactionType).Scan(&reactionID)
+				req.UserID,
+				postID,
+				req.ReactionType,
+			).Scan(&reactionID)
 
 			if err != nil {
 				http.Error(w, "Failed to create reaction", http.StatusInternalServerError)
@@ -616,51 +623,74 @@ func AddReaction(db *sql.DB) http.HandlerFunc {
 				return
 			}
 
-			go notifyPostOwnerOfReaction(db, postID, req.UserID, req.ReactionType)
+			go notifyPostOwnerOfReaction(
+				db,
+				postID,
+				req.UserID,
+				req.ReactionType,
+			)
 
 			w.Header().Set("Content-Type", "application/json")
+
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"reaction_id":   reactionID,
 				"reaction_type": req.ReactionType,
 			})
-		} else if err != nil {
+
+			return
+		}
+
+		if err != nil {
 			http.Error(w, "Database error", http.StatusInternalServerError)
 			log.Println("AddReaction query error:", err)
 			return
-		} else {
-			if existingReactionType == req.ReactionType {
-				_, err = db.Exec(`DELETE FROM reactions WHERE id = $1`, existingReactionID)
-				if err != nil {
-					http.Error(w, "Failed to remove reaction", http.StatusInternalServerError)
-					log.Println("AddReaction delete error:", err)
-					return
-				}
-
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"removed": true,
-				})
-			} else {
-				_, err = db.Exec(`
-                    UPDATE reactions 
-                    SET reaction_type = $1, created_at = NOW() 
-                    WHERE id = $2`,
-					req.ReactionType, existingReactionID)
-
-				if err != nil {
-					http.Error(w, "Failed to update reaction", http.StatusInternalServerError)
-					log.Println("AddReaction update error:", err)
-					return
-				}
-
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"reaction_id":   existingReactionID,
-					"reaction_type": req.ReactionType,
-					"updated":       true,
-				})
-			}
 		}
+
+		if existingReactionType == req.ReactionType {
+
+			_, err = db.Exec(`
+                DELETE FROM reactions
+                WHERE id = $1`,
+				existingReactionID,
+			)
+
+			if err != nil {
+				http.Error(w, "Failed to remove reaction", http.StatusInternalServerError)
+				log.Println("AddReaction delete error:", err)
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"removed": true,
+			})
+
+			return
+		}
+
+		_, err = db.Exec(`
+            UPDATE reactions
+            SET reaction_type = $1,
+                created_at = NOW()
+            WHERE id = $2`,
+			req.ReactionType,
+			existingReactionID,
+		)
+
+		if err != nil {
+			http.Error(w, "Failed to update reaction", http.StatusInternalServerError)
+			log.Println("AddReaction update error:", err)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"reaction_id":   existingReactionID,
+			"reaction_type": req.ReactionType,
+			"updated":       true,
+		})
 	}
 }
 
@@ -877,18 +907,29 @@ func DeleteComment(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func notifyPostOwnerOfReaction(db *sql.DB, postID int, reactorUserID int, reactionType string) {
+func notifyPostOwnerOfReaction(
+	db *sql.DB,
+	postID int,
+	reactorUserID int,
+	reactionType string,
+) {
+
 	var postOwnerID int
 	var postText string
 	var reactorDisplayName string
 
 	err := db.QueryRow(`
-		SELECT user_id, text 
-		FROM posts 
-		WHERE id = $1`, postID).Scan(&postOwnerID, &postText)
+		SELECT user_id, text
+		FROM posts
+		WHERE id = $1`,
+		postID,
+	).Scan(&postOwnerID, &postText)
 
 	if err != nil {
-		log.Printf("Error fetching post info for reaction notification: %v", err)
+		log.Printf(
+			"Error fetching post info for reaction notification: %v",
+			err,
+		)
 		return
 	}
 
@@ -897,36 +938,49 @@ func notifyPostOwnerOfReaction(db *sql.DB, postID int, reactorUserID int, reacti
 	}
 
 	err = db.QueryRow(`
-		SELECT display_name 
-		FROM users 
-		WHERE id = $1`, reactorUserID).Scan(&reactorDisplayName)
+		SELECT display_name
+		FROM users
+		WHERE id = $1`,
+		reactorUserID,
+	).Scan(&reactorDisplayName)
 
 	if err != nil {
-		log.Printf("Error fetching reactor display name: %v", err)
+		log.Printf(
+			"Error fetching reactor display name: %v",
+			err,
+		)
 		reactorDisplayName = "Someone"
 	}
 
 	rows, err := db.Query(`
-		SELECT token 
-		FROM fcm_tokens 
-		WHERE user_id = $1 
-		  AND token IS NOT NULL 
+		SELECT token
+		FROM fcm_tokens
+		WHERE user_id = $1
+		  AND token IS NOT NULL
 		  AND token != ''`,
-		postOwnerID)
+		postOwnerID,
+	)
 
 	if err != nil {
-		log.Printf("Error fetching post owner FCM tokens: %v", err)
+		log.Printf(
+			"Error fetching post owner FCM tokens: %v",
+			err,
+		)
 		return
 	}
+
 	defer rows.Close()
 
 	var tokens []string
+
 	for rows.Next() {
 		var token string
+
 		if err := rows.Scan(&token); err != nil {
 			log.Printf("Error scanning FCM token: %v", err)
 			continue
 		}
+
 		tokens = append(tokens, token)
 	}
 
@@ -934,17 +988,16 @@ func notifyPostOwnerOfReaction(db *sql.DB, postID int, reactorUserID int, reacti
 		return
 	}
 
-	reactionEmojis := map[string]string{
-		"heart":     "❤️",
-		"laugh":     "😂",
-		"sad":       "😢",
-		"angry":     "😠",
-		"surprised": "🤯",
-	}
+	emoji := constants.ReactionEmojis[reactionType]
 
-	emoji := reactionEmojis[reactionType]
-	title := fmt.Sprintf("%s reacted %s to your post", reactorDisplayName, emoji)
+	title := fmt.Sprintf(
+		"%s reacted %s to your post",
+		reactorDisplayName,
+		emoji,
+	)
+
 	body := postText
+
 	if len(body) > 100 {
 		body = body[:97] + "..."
 	}
@@ -957,14 +1010,28 @@ func notifyPostOwnerOfReaction(db *sql.DB, postID int, reactorUserID int, reacti
 		"post_owner_id": strconv.Itoa(postOwnerID),
 	}
 
-	successCount, failureCount, err := services.SendMultipleNotifications(db, tokens, title, body, data)
+	successCount, failureCount, err := services.SendMultipleNotifications(
+		db,
+		tokens,
+		title,
+		body,
+		data,
+	)
+
 	if err != nil {
-		log.Printf("Error sending reaction notification: %v", err)
+		log.Printf(
+			"Error sending reaction notification: %v",
+			err,
+		)
 		return
 	}
 
-	log.Printf("Sent reaction notification for post %d: %d successful, %d failed",
-		postID, successCount, failureCount)
+	log.Printf(
+		"Sent reaction notification for post %d: %d successful, %d failed",
+		postID,
+		successCount,
+		failureCount,
+	)
 }
 
 func notifyPostOwnerOfComment(db *sql.DB, postID int, commenterUserID int, commentText string) {
