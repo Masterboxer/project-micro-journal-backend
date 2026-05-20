@@ -63,9 +63,9 @@ func GetUserById(db *sql.DB) http.HandlerFunc {
 
 		err := db.QueryRow(`SELECT id, username, display_name, dob, 
 			gender, email, COALESCE(password, ''), is_private, created_at, 
-			COALESCE(email_verified, false) FROM users WHERE id = $1`, id).
+			COALESCE(email_verified, false), COALESCE(bio, '') FROM users WHERE id = $1`, id).
 			Scan(&u.ID, &u.Username, &u.DisplayName, &u.DOB, &u.Gender, &u.Email,
-				&u.Password, &u.IsPrivate, &u.CreatedAt, &emailVerified)
+				&u.Password, &u.IsPrivate, &u.CreatedAt, &emailVerified, &u.Bio)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				http.Error(w, "User not found", http.StatusNotFound)
@@ -321,6 +321,48 @@ func UpdateUser(db *sql.DB) http.HandlerFunc {
 
 		updatedUser.Password = ""
 		json.NewEncoder(w).Encode(updatedUser)
+	}
+}
+
+func UpdateUserBio(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		id := vars["id"]
+
+		var req struct {
+			Bio string `json:"bio"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		req.Bio = strings.TrimSpace(req.Bio)
+
+		if len(req.Bio) > 280 {
+			http.Error(w, "Bio cannot exceed 280 characters", http.StatusBadRequest)
+			return
+		}
+
+		_, err := db.Exec(
+			"UPDATE users SET bio = $1 WHERE id = $2",
+			req.Bio,
+			id,
+		)
+
+		if err != nil {
+			http.Error(w, "Failed to update bio", http.StatusInternalServerError)
+			log.Println(err)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message": "Bio updated successfully",
+			"bio":     req.Bio,
+		})
 	}
 }
 
