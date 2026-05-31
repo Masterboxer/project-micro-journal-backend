@@ -108,7 +108,7 @@ func SendDailyReminderNotifications(db *sql.DB) {
 		success, failure, err := services.SendMultipleNotifications(
 			db,
 			tokens,
-			"Time to reflect 📝",
+			"Time to Reflecto 📝",
 			"You haven't added to your micro journal today. Take a minute for yourself and your loved ones",
 			map[string]string{
 				"type":    "daily_reminder",
