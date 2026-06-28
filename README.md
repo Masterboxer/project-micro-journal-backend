@@ -16,5 +16,5 @@ Create DB Backup
 Run CRON Job Service for Daily Reminders
 `docker compose run --rm daily-reminder-worker`
 
-Run CRON Job Service for Streak Reminders
-`docker compose run --rm streak-reminder-worker`
+Run CRON Job Service for Reflecto Score Reminders
+`docker compose run --rm reflecto-score-reminder-worker`
