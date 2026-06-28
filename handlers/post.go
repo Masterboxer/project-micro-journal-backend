@@ -466,16 +466,15 @@ func DeletePost(db *sql.DB) http.HandlerFunc {
 		vars := mux.Vars(r)
 		id := vars["id"]
 
-		var exists bool
-		err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM posts WHERE id = $1)`, id).
-			Scan(&exists)
+		var ownerID int
+		err := db.QueryRow(`SELECT user_id FROM posts WHERE id = $1`, id).Scan(&ownerID)
+		if err == sql.ErrNoRows {
+			http.Error(w, "Post not found", http.StatusNotFound)
+			return
+		}
 		if err != nil {
 			http.Error(w, "Database query failed", http.StatusInternalServerError)
 			log.Println(err)
-			return
-		}
-		if !exists {
-			http.Error(w, "Post not found", http.StatusNotFound)
 			return
 		}
 
@@ -485,6 +484,8 @@ func DeletePost(db *sql.DB) http.HandlerFunc {
 			log.Println(err)
 			return
 		}
+
+		go SubtractReflectoScore(db, ownerID, ActionPost)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -660,6 +661,8 @@ func AddReaction(db *sql.DB) http.HandlerFunc {
 				log.Println("AddReaction delete error:", err)
 				return
 			}
+
+			go SubtractReflectoScore(db, req.UserID, ActionReaction)
 
 			w.Header().Set("Content-Type", "application/json")
 
@@ -901,6 +904,8 @@ func DeleteComment(db *sql.DB) http.HandlerFunc {
 			log.Println("DeleteComment error:", err)
 			return
 		}
+
+		go SubtractReflectoScore(db, ownerID, ActionComment)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -1154,6 +1159,7 @@ func LikeComment(db *sql.DB) http.HandlerFunc {
 				log.Println("LikeComment insert error:", err)
 				return
 			}
+			go AddReflectoScore(db, req.UserID, ActionLike, nil)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{"liked": true})
 		} else if err != nil {
@@ -1165,6 +1171,7 @@ func LikeComment(db *sql.DB) http.HandlerFunc {
 				http.Error(w, "Failed to unlike comment", http.StatusInternalServerError)
 				return
 			}
+			go SubtractReflectoScore(db, req.UserID, ActionLike)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{"liked": false})
 		}

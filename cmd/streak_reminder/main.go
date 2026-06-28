@@ -26,6 +26,6 @@ func main() {
 	}
 
 	log.Println("🔥 Running streak expiry reminder job")
-	handlers.SendStreakExpiryNotifications(db)
+	handlers.SendScoreDecayNotifications(db)
 	log.Println("✅ Streak expiry reminder job finished")
 }

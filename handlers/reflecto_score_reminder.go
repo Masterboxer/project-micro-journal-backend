@@ -9,30 +9,30 @@ import (
 	"masterboxer.com/project-micro-journal/services"
 )
 
-func SendStreakExpiryNotifications(db *sql.DB) {
+func SendScoreDecayNotifications(db *sql.DB) {
 	nowUTC := time.Now().UTC()
-	log.Printf("[StreakReminder] Job started | nowUTC=%s", nowUTC.Format(time.RFC3339))
+	log.Printf("[ScoreDecayReminder] Job started | nowUTC=%s", nowUTC.Format(time.RFC3339))
 
 	rows, err := db.Query(`
-		SELECT s.user_id, s.last_post_date, u.timezone
-		FROM streaks s
-		JOIN users u ON u.id = s.user_id
-		WHERE s.streak_count > 0
-		  AND s.last_post_date IS NOT NULL
+		SELECT rs.user_id, rs.last_post_date, rs.score, u.timezone
+		FROM reflecto_scores rs
+		JOIN users u ON u.id = rs.user_id
+		WHERE rs.score > 0
 		  AND u.timezone IS NOT NULL
 	`)
 	if err != nil {
-		log.Printf("[StreakReminder] DB query failed: %v", err)
+		log.Printf("[ScoreDecayReminder] DB query failed: %v", err)
 		return
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var userID int
-		var lastPostDate time.Time
+		var lastPostDate sql.NullString
+		var score int
 		var timezone string
 
-		if err := rows.Scan(&userID, &lastPostDate, &timezone); err != nil {
+		if err := rows.Scan(&userID, &lastPostDate, &score, &timezone); err != nil {
 			continue
 		}
 
@@ -53,21 +53,12 @@ func SendStreakExpiryNotifications(db *sql.DB) {
 			continue
 		}
 
-		lastPostDateOnly := time.Date(
-			lastPostDate.Year(),
-			lastPostDate.Month(),
-			lastPostDate.Day(),
-			0, 0, 0, 0,
-			time.UTC,
-		)
-
-		if !lastPostDateOnly.Before(journalToday) {
-			continue
-		}
-
-		yesterday := journalToday.AddDate(0, 0, -1)
-		if !lastPostDateOnly.Equal(yesterday) {
-			continue
+		// Skip if they've already posted today
+		if lastPostDate.Valid {
+			t, err := time.Parse("2006-01-02", lastPostDate.String[:10])
+			if err == nil && !t.Before(journalToday) {
+				continue
+			}
 		}
 
 		tokenRows, err := db.Query(`
@@ -97,24 +88,23 @@ func SendStreakExpiryNotifications(db *sql.DB) {
 		success, failure, err := services.SendMultipleNotifications(
 			db,
 			tokens,
-			"🔥 Don't let your streak expire today!",
-			"You have less than an hour to post and keep your streak alive, so let's do that now?",
+			"📉 Your Reflecto Score is at risk!",
+			"Post today to protect your score of "+strconv.Itoa(score)+" — missing a day costs you a point.",
 			map[string]string{
-				"type":    "streak_expiry",
+				"type":    "score_decay_warning",
 				"user_id": strconv.Itoa(userID),
 			},
 		)
-
 		if err != nil {
-			log.Printf("[StreakReminder] FCM error user=%d: %v", userID, err)
+			log.Printf("[ScoreDecayReminder] FCM error user=%d: %v", userID, err)
 			continue
 		}
 
 		log.Printf(
-			"[StreakReminder] Sent streak expiry warning | user=%d success=%d failure=%d",
-			userID, success, failure,
+			"[ScoreDecayReminder] Sent decay warning | user=%d score=%d success=%d failure=%d",
+			userID, score, success, failure,
 		)
 	}
 
-	log.Println("[StreakReminder] Job finished")
+	log.Println("[ScoreDecayReminder] Job finished")
 }

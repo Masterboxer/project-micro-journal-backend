@@ -11,13 +11,12 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// Score points per action
 const (
 	ScorePost     = 5
 	ScoreComment  = 2
 	ScoreLike     = 1
 	ScoreReaction = 1
-	ScoreDecay    = -1 // per day without a post
+	ScoreDecay    = -1
 )
 
 type ActionType string
@@ -37,7 +36,6 @@ type ReflectoScore struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// GetUserReflectoScore handles GET /users/{userId}/reflecto-score
 func GetUserReflectoScore(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
@@ -78,8 +76,28 @@ func GetUserReflectoScore(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// AddReflectoScore is called whenever a user does a scoreable action.
-// Call this from your post/comment/like/reaction handlers.
+func SubtractReflectoScore(db *sql.DB, userID int, action ActionType) {
+	points := pointsForAction(action)
+	if points == 0 {
+		return
+	}
+
+	log.Printf("📉 SubtractReflectoScore: user=%d action=%s points=-%d", userID, action, points)
+
+	_, err := db.Exec(`
+		UPDATE reflecto_scores
+		SET score      = GREATEST(0, score - $1),
+		    updated_at = NOW()
+		WHERE user_id  = $2
+	`, points, userID)
+
+	if err != nil {
+		log.Printf("❌ SubtractReflectoScore error: %v", err)
+	} else {
+		log.Printf("✅ Score decremented for user %d (-%d for deleting %s)", userID, points, action)
+	}
+}
+
 func AddReflectoScore(db *sql.DB, userID int, action ActionType, postDate *time.Time) {
 	points := pointsForAction(action)
 	if points == 0 {
@@ -89,10 +107,8 @@ func AddReflectoScore(db *sql.DB, userID int, action ActionType, postDate *time.
 
 	log.Printf("🌟 AddReflectoScore: user=%d action=%s points=%d", userID, action, points)
 
-	// Upsert: create row if missing, otherwise increment
 	var lastPostDateExpr string
 	if action == ActionPost && postDate != nil {
-		// Store the post date when the action is a post
 		dateStr := postDate.UTC().Format("2006-01-02")
 		_, err := db.Exec(`
 			INSERT INTO reflecto_scores (user_id, score, last_post_date, updated_at)
@@ -114,7 +130,7 @@ func AddReflectoScore(db *sql.DB, userID int, action ActionType, postDate *time.
 		return
 	}
 
-	_ = lastPostDateExpr // not used for non-post actions
+	_ = lastPostDateExpr
 
 	_, err := db.Exec(`
 		INSERT INTO reflecto_scores (user_id, score, updated_at)
@@ -130,8 +146,6 @@ func AddReflectoScore(db *sql.DB, userID int, action ActionType, postDate *time.
 	}
 }
 
-// ApplyDailyDecay should be called once per day (e.g. via a cron job or scheduler).
-// It subtracts 1 point from every user who did NOT post today.
 func ApplyDailyDecay(db *sql.DB) {
 	today := time.Now().UTC().Format("2006-01-02")
 	log.Printf("📉 ApplyDailyDecay running for date: %s", today)

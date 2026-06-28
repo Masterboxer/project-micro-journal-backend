@@ -43,7 +43,7 @@ services:
     volumes:
       - .:/app
       - go-mod-cache:/go/pkg/mod
-    command: go run cmd/streak_reminder/main.go
+    command: go run cmd/reflection_score_reminder/main.go
     environment:
       DATABASE_URL: postgres://postgres:postgres@micro_journal_db:5432/journal?sslmode=disable
       FIREBASE_CREDENTIALS_PATH: /app/project-micro-journal-firebase-adminsdk-fbsvc-e626a40f9b.json
