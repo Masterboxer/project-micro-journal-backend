@@ -298,7 +298,7 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		go UpdateStreakAfterPost(db, p.UserID, journalDate)
+		go AddReflectoScore(db, p.UserID, ActionPost, &journalDate)
 
 		go notifyFollowersOfNewPost(db, p.UserID, p.Text)
 
@@ -629,6 +629,7 @@ func AddReaction(db *sql.DB) http.HandlerFunc {
 				req.UserID,
 				req.ReactionType,
 			)
+			go AddReflectoScore(db, req.UserID, ActionReaction, nil)
 
 			w.Header().Set("Content-Type", "application/json")
 
@@ -792,6 +793,7 @@ func CreateComment(db *sql.DB) http.HandlerFunc {
 		}
 
 		go notifyPostOwnerOfComment(db, postIDInt, comment.UserID, comment.Text)
+		go AddReflectoScore(db, comment.UserID, ActionComment, nil)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
