@@ -35,7 +35,7 @@ services:
       - journal-net
     restart: "no"
 
-  streak-reminder-worker:
+  reflecto-score-reminder-worker:
     profiles: ["workers"]
     image: masterboxer/micro-journal-app:1.0.0
     build:
