@@ -875,15 +875,14 @@ func DeleteComment(db *sql.DB) http.HandlerFunc {
 		var req struct {
 			UserID int `json:"user_id"`
 		}
-
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
 
-		var ownerID int
-		err := db.QueryRow(`SELECT user_id FROM comments WHERE id = $1`,
-			commentID).Scan(&ownerID)
+		var ownerID, postIDInt int
+		err := db.QueryRow(`SELECT user_id, post_id FROM comments WHERE id = $1`,
+			commentID).Scan(&ownerID, &postIDInt)
 
 		if err == sql.ErrNoRows {
 			http.Error(w, "Comment not found", http.StatusNotFound)
@@ -905,7 +904,7 @@ func DeleteComment(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		go SubtractReflectoScore(db, ownerID, ActionPost, nil)
+		go SubtractReflectoScore(db, ownerID, ActionComment, &postIDInt)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
