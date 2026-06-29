@@ -298,7 +298,7 @@ func CreatePost(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		go AddReflectoScore(db, p.UserID, ActionPost, &journalDate)
+		go AddReflectoScore(db, p.UserID, ActionPost, &journalDate, nil)
 
 		go notifyFollowersOfNewPost(db, p.UserID, p.Text)
 
@@ -485,7 +485,7 @@ func DeletePost(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		go SubtractReflectoScore(db, ownerID, ActionPost)
+		go SubtractReflectoScore(db, ownerID, ActionPost, nil)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -630,7 +630,7 @@ func AddReaction(db *sql.DB) http.HandlerFunc {
 				req.UserID,
 				req.ReactionType,
 			)
-			go AddReflectoScore(db, req.UserID, ActionReaction, nil)
+			go AddReflectoScore(db, req.UserID, ActionReaction, nil, &postID)
 
 			w.Header().Set("Content-Type", "application/json")
 
@@ -662,7 +662,7 @@ func AddReaction(db *sql.DB) http.HandlerFunc {
 				return
 			}
 
-			go SubtractReflectoScore(db, req.UserID, ActionReaction)
+			go SubtractReflectoScore(db, req.UserID, ActionReaction, &postID)
 
 			w.Header().Set("Content-Type", "application/json")
 
@@ -796,7 +796,7 @@ func CreateComment(db *sql.DB) http.HandlerFunc {
 		}
 
 		go notifyPostOwnerOfComment(db, postIDInt, comment.UserID, comment.Text)
-		go AddReflectoScore(db, comment.UserID, ActionComment, nil)
+		go AddReflectoScore(db, comment.UserID, ActionComment, nil, &postIDInt)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -905,7 +905,7 @@ func DeleteComment(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		go SubtractReflectoScore(db, ownerID, ActionComment)
+		go SubtractReflectoScore(db, ownerID, ActionPost, nil)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -1159,7 +1159,7 @@ func LikeComment(db *sql.DB) http.HandlerFunc {
 				log.Println("LikeComment insert error:", err)
 				return
 			}
-			go AddReflectoScore(db, req.UserID, ActionLike, nil)
+			go AddReflectoScore(db, req.UserID, ActionLike, nil, nil)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{"liked": true})
 		} else if err != nil {
@@ -1171,7 +1171,7 @@ func LikeComment(db *sql.DB) http.HandlerFunc {
 				http.Error(w, "Failed to unlike comment", http.StatusInternalServerError)
 				return
 			}
-			go SubtractReflectoScore(db, req.UserID, ActionLike)
+			go SubtractReflectoScore(db, req.UserID, ActionLike, nil)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{"liked": false})
 		}

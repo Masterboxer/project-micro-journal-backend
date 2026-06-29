@@ -76,7 +76,17 @@ func GetUserReflectoScore(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func SubtractReflectoScore(db *sql.DB, userID int, action ActionType) {
+func SubtractReflectoScore(db *sql.DB, userID int, action ActionType, postID *int) {
+	if action != ActionPost && postID != nil {
+		_, err := db.Exec(`
+            DELETE FROM reflecto_score_events
+            WHERE user_id = $1 AND post_id = $2 AND action_type = $3
+        `, userID, *postID, string(action))
+		if err != nil {
+			log.Printf("❌ SubtractReflectoScore event delete error: %v", err)
+		}
+	}
+
 	points := pointsForAction(action)
 	if points == 0 {
 		return
@@ -85,12 +95,11 @@ func SubtractReflectoScore(db *sql.DB, userID int, action ActionType) {
 	log.Printf("📉 SubtractReflectoScore: user=%d action=%s points=-%d", userID, action, points)
 
 	_, err := db.Exec(`
-		UPDATE reflecto_scores
-		SET score      = GREATEST(0, score - $1),
-		    updated_at = NOW()
-		WHERE user_id  = $2
-	`, points, userID)
-
+        UPDATE reflecto_scores
+        SET score      = GREATEST(0, score - $1),
+            updated_at = NOW()
+        WHERE user_id  = $2
+    `, points, userID)
 	if err != nil {
 		log.Printf("❌ SubtractReflectoScore error: %v", err)
 	} else {
@@ -98,30 +107,46 @@ func SubtractReflectoScore(db *sql.DB, userID int, action ActionType) {
 	}
 }
 
-func AddReflectoScore(db *sql.DB, userID int, action ActionType, postDate *time.Time) {
+func AddReflectoScore(db *sql.DB, userID int, action ActionType, postDate *time.Time, postID *int) {
 	points := pointsForAction(action)
 	if points == 0 {
 		log.Printf("⚠️ Unknown action type: %s", action)
 		return
 	}
 
+	if action != ActionPost && postID != nil {
+		result, err := db.Exec(`
+            INSERT INTO reflecto_score_events (user_id, post_id, action_type)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (user_id, post_id, action_type) DO NOTHING
+        `, userID, *postID, string(action))
+		if err != nil {
+			log.Printf("❌ AddReflectoScore event insert error: %v", err)
+			return
+		}
+		rows, _ := result.RowsAffected()
+		if rows == 0 {
+			log.Printf("⏭️ Score already awarded for user=%d post=%d action=%s — skipping", userID, *postID, action)
+			return
+		}
+	}
+
 	log.Printf("🌟 AddReflectoScore: user=%d action=%s points=%d", userID, action, points)
 
-	var lastPostDateExpr string
 	if action == ActionPost && postDate != nil {
 		dateStr := postDate.UTC().Format("2006-01-02")
 		_, err := db.Exec(`
-			INSERT INTO reflecto_scores (user_id, score, last_post_date, updated_at)
-			VALUES ($1, $2, $3, NOW())
-			ON CONFLICT (user_id) DO UPDATE
-			SET score         = GREATEST(0, reflecto_scores.score + $2),
-			    last_post_date = CASE
-			        WHEN $3::date > reflecto_scores.last_post_date OR reflecto_scores.last_post_date IS NULL
-			        THEN $3::date
-			        ELSE reflecto_scores.last_post_date
-			    END,
-			    updated_at    = NOW()
-		`, userID, points, dateStr)
+            INSERT INTO reflecto_scores (user_id, score, last_post_date, updated_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (user_id) DO UPDATE
+            SET score          = GREATEST(0, reflecto_scores.score + $2),
+                last_post_date = CASE
+                    WHEN $3::date > reflecto_scores.last_post_date OR reflecto_scores.last_post_date IS NULL
+                    THEN $3::date
+                    ELSE reflecto_scores.last_post_date
+                END,
+                updated_at     = NOW()
+        `, userID, points, dateStr)
 		if err != nil {
 			log.Printf("❌ AddReflectoScore (post) error: %v", err)
 		} else {
@@ -130,15 +155,13 @@ func AddReflectoScore(db *sql.DB, userID int, action ActionType, postDate *time.
 		return
 	}
 
-	_ = lastPostDateExpr
-
 	_, err := db.Exec(`
-		INSERT INTO reflecto_scores (user_id, score, updated_at)
-		VALUES ($1, $2, NOW())
-		ON CONFLICT (user_id) DO UPDATE
-		SET score      = GREATEST(0, reflecto_scores.score + $2),
-		    updated_at = NOW()
-	`, userID, points)
+        INSERT INTO reflecto_scores (user_id, score, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (user_id) DO UPDATE
+        SET score      = GREATEST(0, reflecto_scores.score + $2),
+            updated_at = NOW()
+    `, userID, points)
 	if err != nil {
 		log.Printf("❌ AddReflectoScore error: %v", err)
 	} else {
